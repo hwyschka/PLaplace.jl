@@ -1,0 +1,5 @@
+*.vtu
+*.txt
+*.png
+results/
+logs/
