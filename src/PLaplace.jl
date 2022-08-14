@@ -1,4 +1,4 @@
-module PLaplaceDev
+module PLaplace
 
 using MinFEM
 using LinearAlgebra, SparseArrays, InvertedIndices
