@@ -1,3 +1,5 @@
+<center><img src="https://user-images.githubusercontent.com/66529462/184855093-33aca1eb-96a3-447f-adb6-42d2ac0a5a10.png" alt="fem" width="400"/></center>
+
 ## A Solver for Problems of the _p_-Laplacian PDE Operator.
 
 This package provides a solver for problems of the scalar or vector-valued [_p_-Laplacian](https://en.wikipedia.org/wiki/P-Laplacian) with finite _p_ including source terms and mixed Dirichlet-Neumann boundary conditions.
