@@ -7,7 +7,7 @@ function Testcase()
     g(x) = 0
     h(x) = x[1]-1
 
-    mesh = import_mesh("meshes/rectangle_hole.msh")
+    mesh = import_mesh("../meshes/rectangle_hole.msh")
     dirichletBoundary = select_boundaries(mesh, 1001, 1002, 1003, 1004)
     neumannBoundary = select_boundaries(mesh, 1005)
 

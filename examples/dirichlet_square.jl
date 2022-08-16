@@ -7,7 +7,7 @@ function Testcase()
 
     g(x) = x[1]^2
 
-    mesh = import_mesh("meshes/square.msh")
+    mesh = import_mesh("../meshes/square.msh")
     dirichletBoundary = select_boundaries(mesh)
 
     for p in [2.0, 3.0, 5.0, 8.0, 15.0, 25.0]

@@ -18,7 +18,7 @@ function Testcase()
         end
     end
 
-    mesh = import_mesh("meshes/cube.msh")
+    mesh = import_mesh("../meshes/cube.msh")
     neumannBoundary = select_boundaries(mesh, 1003, 1004, 1005)
     dirichletBoundary = select_boundaries(mesh, 1001, 1002, 1006)
 

@@ -8,7 +8,7 @@ function Testcase()
     h(x) = x[1]^1 - x[2]^2
     g(x) = 0
 
-    mesh = import_mesh("meshes/square.msh")
+    mesh = import_mesh("../meshes/square.msh")
     dirichletBoundary = select_boundaries(mesh, 1001, 1004)
     neumannBoundary = select_boundaries(mesh, 1002, 1003)
 
