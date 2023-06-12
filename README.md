@@ -2,6 +2,9 @@
 
 ## A Solver for Problems of the _p_-Laplacian PDE Operator.
 
+[![][test-badge]][test-url]
+[![][cov-badge]][cov-url]  
+
 This package provides a solver for problems of the scalar or vector-valued [_p_-Laplacian](https://en.wikipedia.org/wiki/P-Laplacian) with finite _p_ including source terms and mixed Dirichlet-Neumann boundary conditions.
 The solver works iteratively based on a piece-wise linear finite element discretization and interior-point methods.
 Theory can be found in the publications \[[1](#references)\] and \[[2](#references)\]. 
@@ -107,3 +110,10 @@ data = solve_plaplace(p, mesh, g, dirichletBoundary, h=h, neumannBoundary=neuman
 Mathematik 146.2, pp. 369–400. 2020.<br/>
 \[2\] H. Wyschka and M. Siebenborn. “[Towards computing high-order p-harmonic descent directions and their limits in shape optimization](https://arxiv.org/abs/2208.06897)”. arXiv (Preprint). 2022<br/>
 \[3\] K. Salari and P. Knupp. “[Code Verification by the Method of Manufactured Solutions](https://www.osti.gov/biblio/759450-wLI4Ux/native/)”. Sandia Report. 2000.
+
+
+
+[test-url]: https://github.com/hwyschka/PLaplace.jl/actions?query=workflow%3Atest
+[test-badge]: https://github.com/hwyschka/PLaplace.jl/workflows/test/badge.svg
+[cov-url]: https://codecov.io/gh/hwyschka/PLaplace.jl
+[cov-badge]: https://codecov.io/gh/hwyschka/PLaplace.jl/coverage.svg
