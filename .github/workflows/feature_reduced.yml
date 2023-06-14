@@ -1,6 +1,6 @@
 name: Feature Test Full
 
-on: 
+on:
   push:
     branches:
       - "*"
@@ -15,11 +15,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: 
+        julia-version:
           - '1.6'
         julia-arch:
           - x64
-        os: 
+        os:
           - ubuntu-latest
 
     steps:
