@@ -1,32 +1,26 @@
-name: Test
+name: Feature Test Full
 
 on: 
   push:
     branches:
-      - master
+      - "*"
+      - "!master"
   pull_request:
 
 jobs:
   test:
-    if: "!contains(github.event.head_commit.message, 'skip test')"
-    name: julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} 
+    if: "!contains(github.event.head_commit.message, 'full test')"
+    name: julia ${{ matrix.julia-version }} - ${{ matrix.os }} - ${{ matrix.julia-arch }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        julia-version:
+        julia-version: 
           - '1.6'
-          - '1'
-          - 'nightly'
         julia-arch:
           - x64
-          # - x86
         os: 
           - ubuntu-latest
-          - windows-latest
-          - macOS-latest
-        # exclude:
-        #   - os: macOS-latest
-        #     julia-arch: x86
 
     steps:
       - uses: actions/checkout@v2
