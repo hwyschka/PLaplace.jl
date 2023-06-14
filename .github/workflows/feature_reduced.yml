@@ -1,4 +1,4 @@
-name: Feature Test Full
+name: Feature Test Reduced
 
 on:
   push:
