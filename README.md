@@ -113,7 +113,7 @@ Mathematik 146.2, pp. 369–400. 2020.<br/>
 
 
 
-[test-url]: https://github.com/hwyschka/PLaplace.jl/actions?query=workflow%3Atest
-[test-badge]: https://github.com/hwyschka/PLaplace.jl/workflows/test/badge.svg
+[test-url]: https://github.com/hwyschka/PLaplace.jl/actions/workflows/test.yml
+[test-badge]: https://github.com/hwyschka/PLaplace.jl/actions/workflows/test.yml/badge.svg
 [cov-url]: https://codecov.io/gh/hwyschka/PLaplace.jl
-[cov-badge]: https://codecov.io/gh/hwyschka/PLaplace.jl/coverage.svg
+[cov-badge]: https://codecov.io/gh/hwyschka/PLaplace.jl/branch/master/graph/badge.svg
