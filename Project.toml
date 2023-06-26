@@ -1,7 +1,7 @@
 name = "PLaplace"
 uuid = "05599243-9ba8-485a-9b22-0f602ec9135f"
 authors = ["Henrik Wyschka <henrik.wyschka@uni-hamburg.de>"]
-version = "1.0.0"
+version = "1.1.0"
 
 [deps]
 IncompleteLU = "40713840-3770-5561-ab4c-a76e7d0d7895"

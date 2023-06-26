@@ -1,5 +1,7 @@
 *.vtu
 *.txt
 *.png
+*.svg
+*.pdf
 results/
 logs/
