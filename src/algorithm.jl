@@ -1,5 +1,11 @@
 """
-    solve_plaplace(p::Float64, mesh::Mesh, g::Function, dirichletBoundary::Set{Boundary}; <keyword arguments>) -> PLaplaceData
+    solve_plaplace(
+        p::Float64,
+        mesh::Mesh,
+        g::Union{AbstractVector{Float64}, Function},
+        dirichletBoundary::Set{Boundary};
+        <keyword arguments>
+    ) -> PLaplaceData
     
 Returns solution to a given problem for the p-Laplace operator with source term and mixed Dirichlet and Neumann boundary conditions. 
 Supports either all functions given as continous pointer or discrete evaluations.
@@ -32,51 +38,101 @@ Coming soon. See Sébastien Loisel: Effient algorithms for solving the p-Laplaci
     - `conditionFileName::String=""`: file name for condition log if set.
     - `consoleOutput::Bool=true`: select if current values are printed to console during the iteration.
 """
-function solve_plaplace(p::Float64, mesh::Mesh, g::Function, dirichletBoundary::Set{Boundary}; 
-    f::Function=emptyfunction, neumannBoundary::Set{Boundary}=Set{Boundary}(), h::Function=emptyfunction, qdim::Int64=1,
-    eps::Float64=1e-6, stepsize::Stepsize=ADAPTIVE, maxIter::Int64=1000, kappa::Float64=10.0, maxIterationsBacktracking::Int64=25, 
-    decrementFactorBacktracking::Float64=0.25, solver::LinearSolver=CHOLESKY, preconditioner::Preconditioner=NONE, 
-    useHarmonicProlongation::Bool=true, objectiveFileName::String="", conditionFileName::String="", consoleOutput::Bool=true)
-
-    _f = f == emptyfunction ? zeros(Float64, mesh.nnodes * qdim) : evaluate_mesh_function(mesh, f, qdim=qdim) 
-    _g = (isempty(dirichletBoundary) || g == emptyfunction) ? zeros(Float64, mesh.nnodes * qdim) : evaluate_mesh_function(mesh, g, dirichletBoundary, qdim=qdim)
-    _h = (isempty(neumannBoundary) || h == emptyfunction) ? zeros(Float64, mesh.nnodes * qdim) : evaluate_mesh_function(mesh, h, neumannBoundary, qdim=qdim)
-    
-    return solve_plaplace(p, mesh, _g, dirichletBoundary, f=_f, neumannBoundary=neumannBoundary, h=_h, 
-                    qdim=qdim, eps=eps, stepsize=stepsize,maxIter=maxIter,kappa=kappa, maxIterationsBacktracking=maxIterationsBacktracking, 
-                    decrementFactorBacktracking=decrementFactorBacktracking, solver=solver, preconditioner=preconditioner,
-                    useHarmonicProlongation=useHarmonicProlongation, objectiveFileName=objectiveFileName, conditionFileName=conditionFileName,
-                    consoleOutput=consoleOutput)
-end
-
-function solve_plaplace(p::Float64, mesh::Mesh, g::AbstractVector{Float64}, dirichletBoundary::Set{Boundary}; 
-    f::AbstractVector{Float64}=Vector{Float64}(), neumannBoundary::Set{Boundary}=Set{Boundary}(), h::AbstractVector{Float64}=Vector{Float64}(), qdim::Int64=1,
-    eps::Float64=1e-6, stepsize::Stepsize=ADAPTIVE, maxIter::Int64=1000, kappa::Float64=10.0, maxIterationsBacktracking::Int64=25, 
-    decrementFactorBacktracking::Float64=0.25, solver::LinearSolver=CHOLESKY, preconditioner::Preconditioner=NONE, 
-    useHarmonicProlongation::Bool=true, objectiveFileName::String="", conditionFileName::String="", consoleOutput::Bool=true)    
-
+function solve_plaplace(
+    p::Float64,
+    mesh::Mesh,
+    g::Union{AbstractVector{Float64}, Function},
+    dirichletBoundary::Set{Boundary}; 
+    f::Union{AbstractVector{Float64}, Function}=Vector{Float64}(),
+    neumannBoundary::Set{Boundary}=Set{Boundary}(),
+    h::Union{AbstractVector{Float64}, Function}=Vector{Float64}(),
+    qdim::Int64=1,
+    eps::Float64=1e-6,
+    barrier::Barrier=DEFAULT,
+    stepsize::Stepsize=ADAPTIVE,
+    maxIter::Int64=1000,
+    kappa::Float64=10.0,
+    maxIterationsBacktracking::Int64=25, 
+    decrementFactorBacktracking::Float64=0.25,
+    solver::LinearSolver=CHOLESKY,
+    preconditioner::Preconditioner=NONE, 
+    useHarmonicProlongation::Bool=true,
+    objectiveFileName::String="",
+    conditionFileName::String="",
+    consoleOutput::Bool=true
+)    
     if p < 1 || isinf(p)
         throw(DomainError(p, "This package only supports 1 ≤ p ≤ ∞."))
+    end
+
+    if f isa Function
+        _f = f == emptyfunction ?
+        zeros(Float64, mesh.nnodes * qdim) :
+        evaluate_mesh_function(mesh, f, qdim=qdim)
+    else
+        _f = f
+    end
+    if g isa Function
+        _g = g == emptyfunction ?
+        zeros(Float64, mesh.nnodes * qdim) :
+        evaluate_mesh_function(mesh, g, dirichletBoundary, qdim=qdim)
+    else
+        _g = g
+    end
+    if h isa Function
+        _h = h == emptyfunction ?
+        zeros(Float64, mesh.nnodes * qdim) :
+        evaluate_mesh_function(mesh, h, neumannBoundary, qdim=qdim)
+    else
+        _h = h
     end
 
     times = zeros(Float64, 3)
     iterations = zeros(Int64, 2)
 
-    times[1] += @elapsed outputData = PLaplaceData(mesh, qdim, p, eps, stepsize)
+    times[1] += @elapsed outputData = PLaplaceData(
+        mesh,
+        dirichletBoundary,
+        neumannBoundary,
+        _f,
+        _h,
+        qdim,
+        p,
+        eps,
+        stepsize
+    )
     consoleOutput && print_defaultdata(outputData)
 
+    consoleOutput && println("Initializing barrier function")
+    times[1] += @elapsed barrierFunction = BarrierFunction(barrier, p)
+
     consoleOutput && println("Initializing static data")
-    times[1] += @elapsed staticData = StaticData(p, mesh, dirichletBoundary, neumannBoundary, 
-                                                    f, g, h, qdim,
-                                                    eps, maxIter, kappa, 
-                                                    maxIterationsBacktracking, decrementFactorBacktracking,
-                                                    solver, preconditioner, useHarmonicProlongation, 
-                                                    consoleOutput, objectiveFileName, conditionFileName)
+    times[1] += @elapsed staticData = StaticData(
+        p,
+        mesh,
+        dirichletBoundary,
+        neumannBoundary, 
+        _f,
+        _g,
+        _h,
+        qdim,
+        eps,
+        maxIter,
+        kappa, 
+        maxIterationsBacktracking,
+        decrementFactorBacktracking,
+        solver,
+        preconditioner,
+        useHarmonicProlongation, 
+        consoleOutput,
+        objectiveFileName,
+        conditionFileName
+    )
     add_staticdata!(outputData, staticData)
     consoleOutput && println("Static data assembly finished")
 
     consoleOutput && println("Initializing iteration data")
-    times[1] += @elapsed iterationData = IterationData(compute_initialguess(staticData))
+    times[1] += @elapsed iterationData = IterationData(barrierFunction, staticData)
     times[1] += @elapsed assemble!(iterationData, staticData)
     consoleOutput && println("Iteration data assembly finished")
 

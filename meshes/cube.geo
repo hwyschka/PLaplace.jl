@@ -1,4 +1,4 @@
-// Gmsh project created on Fri Jan 07 11:24:20 2022
+// Gmsh project created on Mon Sep 12 10:52:29 2022
 SetFactory("OpenCASCADE");
 //+
 Point(1) = {0, 0, 0, 1.0};
@@ -81,4 +81,4 @@ Physical Surface("bottom", 1005) = {5};
 //+
 Physical Surface("top", 1006) = {6};
 //+
-Physical Volume("domain", -1) = {1};
+Physical Volume("domain", 10001) = {1};

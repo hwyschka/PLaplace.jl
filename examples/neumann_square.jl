@@ -13,7 +13,14 @@ function Testcase()
     neumannBoundary = select_boundaries(mesh, 1002, 1003)
 
     for p in [2.0, 3.0, 5.0, 8.0, 15.0, 25.0]
-        data::PLaplaceData  = solve_plaplace(p, mesh, g, dirichletBoundary, h=h, neumannBoundary=neumannBoundary)
+        data::PLaplaceData  = solve_plaplace(
+            p,
+            mesh,
+            g,
+            dirichletBoundary,
+            h=h,
+            neumannBoundary=neumannBoundary
+        )
     
         write_result_to_vtk(outputPath * "NeumannProblem2D_p=$p", data)
         write_log(outputPath * "log", data)
