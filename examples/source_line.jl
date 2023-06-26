@@ -21,7 +21,16 @@ function Testcase()
         write_to_txt(data.v, mesh, outputPath * "SourceProblem1D_p=$p")
     end
 
-    plt = plot(getindex.(mesh.Nodes,1), evaluate_mesh_function(mesh,f), label="f", c=:green, line=:dash, aspect_ratio=:equal, xlims=(0,1), ylims=(0,0.5))
+    plt = plot(
+        getindex.(mesh.Nodes,1),
+        evaluate_mesh_function(mesh,f),
+        label="f",
+        c=:green,
+        line=:dash,
+        aspect_ratio=:equal,
+        xlims=(0,1),
+        ylims=(0,0.5)
+    )
     
     for p in ps
         N, v = read_from_txt(outputPath * "SourceProblem1D_p=$p.txt")
