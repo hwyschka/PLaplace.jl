@@ -3,7 +3,6 @@
 ## A Solver for Problems of the _p_-Laplacian PDE Operator.
 
 [![][test-badge]][test-url]
-[![][cov-badge]][cov-url]  
 
 This package provides a solver for problems of the scalar or vector-valued [_p_-Laplacian](https://en.wikipedia.org/wiki/P-Laplacian) with finite _p_ including source terms and mixed Dirichlet-Neumann boundary conditions.
 The solver works iteratively based on a piece-wise linear finite element discretization and interior-point methods.
@@ -103,6 +102,11 @@ For a full list including solver parameters see the documentation.
 ```julia
 data = solve_plaplace(p, mesh, g, dirichletBoundary, h=h, neumannBoundary=neumannBoundary)
 ```
+
+## Acknowledgement
+The author acknowledges the support by the Deutsche Forschungsgemeinschaft (DFG)
+within the Research Training Group GRK 2583
+"Modeling, Simulation and Optimization of Fluid Dynamic Applications”.
 
 ## References
 
