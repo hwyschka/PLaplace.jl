@@ -20,7 +20,7 @@ function pathfollowing_auxilliary_adaptive(S::StaticData, I::IterationData)
     end
 
     if S.logCondition
-        write_step(S.auxConditionFileName, 0, cond(I.unfactorizedHessianF,Inf))
+        write_step(S.auxConditionFileName, 0, I.conditionHessian)
     end
 
     for k = 1:S.maxIter
@@ -67,7 +67,7 @@ function pathfollowing_auxilliary_adaptive(S::StaticData, I::IterationData)
         end
 
         if S.logCondition
-            write_step(S.auxConditionFileName, k, cond(I.unfactorizedHessianF,Inf))
+            write_step(S.auxConditionFileName, k, I.conditionHessian)
         end
 
         try
@@ -125,7 +125,7 @@ function pathfollowing_main_adaptive(S::StaticData, I::IterationData)
     iterationCount::Int64 = 0
 
     if S.logCondition
-        write_step(S.mainConditionFileName, 0, cond(I.unfactorizedHessianF,Inf))
+        write_step(S.mainConditionFileName, 0, I.conditionHessian)
     end
     
     for k = 1:S.maxIter
@@ -191,7 +191,7 @@ function pathfollowing_main_adaptive(S::StaticData, I::IterationData)
         end
 
         if S.logCondition
-            write_step(S.mainConditionFileName, k, cond(I.unfactorizedHessianF,Inf))
+            write_step(S.mainConditionFileName, k, I.conditionHessian)
         end
         
         if t >= S.tolInv
@@ -229,7 +229,7 @@ function pathfollowing_auxilliary_long(S::StaticData, I::IterationData)
     end
 
     if S.logCondition
-        write_step(S.auxConditionFileName, 0, cond(I.unfactorizedHessianF,Inf))
+        write_step(S.auxConditionFileName, 0, I.conditionHessian)
     end
 
     for k = 1:S.maxIter
@@ -252,7 +252,7 @@ function pathfollowing_auxilliary_long(S::StaticData, I::IterationData)
         apply_descent!(I, S)    
         
         if S.logCondition
-            write_step(S.auxConditionFileName, k, cond(I.unfactorizedHessianF,Inf))
+            write_step(S.auxConditionFileName, k, I.conditionHessian)
         end
 
         try
@@ -304,7 +304,7 @@ function pathfollowing_main_long(S::StaticData, I::IterationData)
     iterationCount::Int64 = 0
 
     if S.logCondition
-        write_step(S.mainConditionFileName, 0, cond(I.unfactorizedHessianF,Inf))
+        write_step(S.mainConditionFileName, 0, I.conditionHessian)
     end
 
     for k = 1:S.maxIter
@@ -344,7 +344,7 @@ function pathfollowing_main_long(S::StaticData, I::IterationData)
         end
 
         if S.logCondition
-            write_step(S.mainConditionFileName, k, cond(I.unfactorizedHessianF,Inf))
+            write_step(S.mainConditionFileName, k, I.conditionHessian)
         end
 
         if t >= S.tolInv
@@ -382,7 +382,7 @@ function pathfollowing_auxilliary_short(S::StaticData, I::IterationData)
     end
 
     if S.logCondition
-        write_step(S.auxConditionFileName, 0, cond(I.unfactorizedHessianF,Inf))
+        write_step(S.auxConditionFileName, 0, I.conditionHessian)
     end
     
     for k = 1:S.maxIter
@@ -395,7 +395,7 @@ function pathfollowing_auxilliary_short(S::StaticData, I::IterationData)
         apply_descent!(I, S, useBacktracking=false)
 
         if S.logCondition
-            write_step(S.auxConditionFileName, k, cond(I.unfactorizedHessianF,Inf))
+            write_step(S.auxConditionFileName, k, I.conditionHessian)
         end
 
         snorm::Float64 = 0
@@ -448,7 +448,7 @@ function pathfollowing_main_short(S::StaticData, I::IterationData)
     iterationCount::Int64 = 0
 
     if S.logCondition
-        write_step(S.mainConditionFileName, 0, cond(I.unfactorizedHessianF,Inf))
+        write_step(S.mainConditionFileName, 0, I.conditionHessian)
     end
     
     for k = 1:S.maxIter
@@ -478,7 +478,7 @@ function pathfollowing_main_short(S::StaticData, I::IterationData)
         end
 
         if S.logCondition
-            write_step(S.mainConditionFileName, k, cond(I.unfactorizedHessianF,Inf))
+            write_step(S.mainConditionFileName, k, I.conditionHessian)
         end
         
         if t >= S.tolInv

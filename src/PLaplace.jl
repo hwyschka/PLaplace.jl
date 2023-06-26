@@ -8,12 +8,22 @@ using Printf, WriteVTK
 include("utility.jl")
 include("output.jl")
 include("linearsystems.jl")
+include("problem.jl")
 include("staticdata.jl")
+
+include("barriers/barrierfunction.jl")
+include("barriers/finite.jl")
+
 include("iterationdata.jl")
 include("pathfollowing.jl")
 include("algorithm.jl")
 
-export  PLaplaceData
+export  PLaplaceData,
+        ConditionData,
+        ErrorData
+
+export  objective_functional,
+        compute_errors
 
 export  solve_plaplace
 
@@ -28,7 +38,9 @@ export  write_result_to_vtk,
         write_error_header,
         write_error,
         print_defaultdata,
-        print_statistics
+        print_statistics,
+        read_condition,
+        read_error
 
 export  assemble_derivativetensor,
         assemble_derivativetensor_boundary,

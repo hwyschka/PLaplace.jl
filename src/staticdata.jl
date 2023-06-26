@@ -36,8 +36,10 @@ mutable struct StaticData
     "discrete derivative of the prolonged boundary condition"
     b::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}}
 
-    "constant for barrier parameter"
-    sigma::Int8
+    "constant for barrier self-concordance order"
+    sigma::Int64
+    "constant factor for barrier terms"
+    alpha::Float64
     "algorithm constant given by Nesterov as 1/9"
     beta::Float64
     "algorithm constant given by Nesterov as 5/36"
@@ -80,12 +82,27 @@ mutable struct StaticData
     mainConditionFileName::String
 end
 
-function StaticData(p::Float64, mesh::Mesh, dirichletBoundary::Set{Boundary}, neumannBoundary::Set{Boundary}, 
-                    f::AbstractVector{Float64}, g::AbstractVector{Float64}, h::AbstractVector{Float64}, qdim::Int64,
-                    eps::Float64, maxIter::Int64, kappa::Float64, maxIterationsBacktracking::Int64, decrementFactorBacktracking::Float64,
-                    solver::LinearSolver, preconditioner::Preconditioner, useHarmonicProlongation::Bool, consoleOutput::Bool,
-                    objectiveFileName::String, conditionFileName::String)
-
+function StaticData(
+    p::Float64,
+    mesh::Mesh,
+    dirichletBoundary::Set{Boundary},
+    neumannBoundary::Set{Boundary}, 
+    f::AbstractVector{Float64},
+    g::AbstractVector{Float64},
+    h::AbstractVector{Float64},
+    qdim::Int64,
+    eps::Float64,
+    maxIter::Int64,
+    kappa::Float64,
+    maxIterationsBacktracking::Int64,
+    decrementFactorBacktracking::Float64,
+    solver::LinearSolver,
+    preconditioner::Preconditioner,
+    useHarmonicProlongation::Bool,
+    consoleOutput::Bool,
+    objectiveFileName::String,
+    conditionFileName::String
+)
     log_console = consoleOutput ? println : emptyfunction
     logObjective = !isempty(objectiveFileName)
     logCondition = !isempty(conditionFileName)
@@ -101,6 +118,7 @@ function StaticData(p::Float64, mesh::Mesh, dirichletBoundary::Set{Boundary}, ne
 
     sigma = compute_sigma(p)
     nu = mesh.nelems * (sigma + 2)
+    alpha = sigma
     beta = 1/9
     gamma = 5/36
     tolFactor = (nu + (((beta + sqrt(nu)) * beta) / (1 - beta))) 
@@ -122,7 +140,19 @@ function StaticData(p::Float64, mesh::Mesh, dirichletBoundary::Set{Boundary}, ne
     log_console("   Boundary sets computed")
 
     if useHarmonicProlongation
-        gProl = compute_prolongation_harmonic(g, mesh, hasSourceTerm, f, dirichletNodes, hasNeumannBoundary, h, neumannElements, solveLS, computePreconditioner, qdim=qdim)
+        gProl = compute_prolongation_harmonic(
+            g,
+            mesh,
+            hasSourceTerm,
+            f,
+            dirichletNodes,
+            hasNeumannBoundary,
+            h,
+            neumannElements,
+            solveLS,
+            computePreconditioner,
+            qdim=qdim
+        )
     else
         gProl = compute_prolongation_zero(g, mesh)
     end
@@ -134,19 +164,69 @@ function StaticData(p::Float64, mesh::Mesh, dirichletBoundary::Set{Boundary}, ne
     b = compute_derivative(D, gProl)
     log_console("   Discrete Derivatives assembled")
 
-    c = compute_systemvector(mesh, p, omega, dirichletNodes, hasNeumannBoundary, neumannElements, h, hasSourceTerm, f, qdim)
-    R = compute_upperbound(mesh, p, b, omega, hasNeumannBoundary, neumannElements, h, hasSourceTerm, f, qdim)
+    c = compute_systemvector(
+        mesh,
+        p,
+        omega,
+        dirichletNodes,
+        hasNeumannBoundary,
+        neumannElements,
+        h,
+        hasSourceTerm,
+        f,
+        qdim
+    )
+    R = compute_upperbound(
+        mesh,
+        p,
+        b,
+        omega,
+        hasNeumannBoundary,
+        neumannElements,
+        h,
+        hasSourceTerm,
+        f,
+        qdim
+    )
     log_console("   System values set")
 
-    return StaticData(p, mesh.d, qdim, mesh.nnodes, mesh.nelems, 
-                        calculationNodes, length(calculationNodes), length(calculationNodes)*qdim,
-                        c, R,
-                        omega, Dmod, gProl, b,
-                        sigma, beta, gamma, eps, tolInv, tolFactor, maxIter, 
-                        kappa, maxIterationsBacktracking, decrementFactorBacktracking,
-                        solveLS, factorize, computePreconditioner,
-                        log_console, logObjective, logCondition,
-                        auxObjectiveFileName, mainObjectiveFileName, auxConditionFileName, mainConditionFileName)
+    return StaticData(
+        p,
+        mesh.d,
+        qdim,
+        mesh.nnodes,
+        mesh.nelems, 
+        calculationNodes,
+        length(calculationNodes),
+        length(calculationNodes)*qdim,
+        c,
+        R,
+        omega,
+        Dmod,
+        gProl,
+        b,
+        sigma,
+        alpha,
+        beta,
+        gamma,
+        eps,
+        tolInv,
+        tolFactor,
+        maxIter, 
+        kappa,
+        maxIterationsBacktracking,
+        decrementFactorBacktracking,
+        solveLS,
+        factorize,
+        computePreconditioner,
+        log_console,
+        logObjective,
+        logCondition,
+        auxObjectiveFileName,
+        mainObjectiveFileName,
+        auxConditionFileName,
+        mainConditionFileName
+    )
 end
 
 """
@@ -159,22 +239,39 @@ function compute_sigma(p::Float64)
 end
 
 """
-    compute_systemvector(mesh::Mesh, p::Float64, omega::AbstractVector{Float64}, dirichletNodes::Set{Int64}, 
-                            hasNeumannBoundary::Bool, neumannElements::Set{Int64}, h::AbstractVector{Float64},
-                            hasSourceTerm::Bool, f::AbstractVector{Float64}, qdim::Int64) -> Vector{Float64}
+    compute_systemvector(
+        mesh::Mesh,
+        p::Float64,
+        omega::AbstractVector{Float64},
+        dirichletNodes::Set{Int64}, 
+        hasNeumannBoundary::Bool,
+        neumannElements::Set{Int64},
+        h::AbstractVector{Float64},
+        hasSourceTerm::Bool,
+        f::AbstractVector{Float64},
+        qdim::Int64
+    ) -> Vector{Float64}
     
 Computes system vector c for a p-Poisson problem to solve with a barrier method.
 """
-function compute_systemvector(mesh::Mesh, p::Float64, omega::AbstractVector{Float64}, dirichletNodes::Set{Int64}, 
-                                hasNeumannBoundary::Bool, neumannElements::Set{Int64}, h::AbstractVector{Float64},
-                                hasSourceTerm::Bool, f::AbstractVector{Float64}, qdim::Int64)
-    
-    elementsToDrop = Set{Int64}()
+function compute_systemvector(
+    mesh::Mesh,
+    p::Float64,
+    omega::AbstractVector{Float64},
+    dirichletNodes::Set{Int64}, 
+    hasNeumannBoundary::Bool,
+    neumannElements::Set{Int64},
+    h::AbstractVector{Float64},
+    hasSourceTerm::Bool,
+    f::AbstractVector{Float64},
+    qdim::Int64
+)    
+    entriesToDrop = Set{Int64}()
     if qdim == 1
-        elementsToDrop = dirichletNodes
+        entriesToDrop = dirichletNodes
     else
         for node in dirichletNodes
-            union!(elementsToDrop, qdim*(node-1)+1:qdim*node)
+            union!(entriesToDrop, qdim*(node-1)+1:qdim*node)
         end
     end
 
@@ -182,15 +279,29 @@ function compute_systemvector(mesh::Mesh, p::Float64, omega::AbstractVector{Floa
     
     if hasSourceTerm
         if length(f) == mesh.nnodes*qdim
-            M = assemble_massmatrix(mesh, qdim=qdim, order=3)
-            rhs -= (M * f)[1:end .∉ [elementsToDrop]]
+            M = assemble_massmatrix(
+                mesh,
+                qdim=qdim,
+                order=3
+            )
+            rhs -= (M * f)[1:end .∉ [entriesToDrop]]
         elseif mod(length(f), mesh.nelems*qdim) == 0
             nPoints = length(f) / (mesh.nelems * qdim)
             quadOrder = quadrature_order(mesh.d, nPoints)
             
-            E = assemble_basismatrix(mesh, qdim=qdim, order=quadOrder)
-            W = Diagonal(assemble_weightmultivector(mesh, qdim=qdim, order=quadOrder))
-            rhs -= (E' * W * f)[1:end .∉ [elementsToDrop]]
+            E = assemble_basismatrix(
+                mesh,
+                qdim=qdim,
+                order=quadOrder
+            )
+            W = Diagonal(
+                assemble_weightmultivector(
+                    mesh,
+                    qdim=qdim,
+                    order=quadOrder
+                )
+            )
+            rhs -= (E' * W * f)[1:end .∉ [entriesToDrop]]
         else
             throw(DomainError(f,"Dimension Missmatch"))
         end
@@ -198,15 +309,31 @@ function compute_systemvector(mesh::Mesh, p::Float64, omega::AbstractVector{Floa
     
     if hasNeumannBoundary
         if length(h) == mesh.nnodes*qdim
-            N = assemble_massmatrix_boundary(mesh, boundaryElements=neumannElements, qdim=qdim, order=3)
-            rhs -= (N * h)[1:end .∉ [elementsToDrop]]
+            N = assemble_massmatrix_boundary(
+                mesh,
+                boundaryElements=neumannElements,
+                qdim=qdim,
+                order=3
+            )
+            rhs -= (N * h)[1:end .∉ [entriesToDrop]]
         elseif mod(length(h),mesh.nboundelems*qdim) == 0
             nPoints = div(length(h), mesh.nboundelems * qdim)
             quadOrder = quadrature_order(mesh.d-1, nPoints)
 
-            E = assemble_basismatrix_boundary(mesh, boundaryElements=neumannElements, qdim=qdim, order=quadOrder)
-            W = Diagonal(assemble_weightmultivector_boundary(mesh, qdim=qdim, order=quadOrder))
-            rhs -= (E' * W * h)[1:end .∉ [elementsToDrop]]
+            E = assemble_basismatrix_boundary(
+                mesh,
+                boundaryElements=neumannElements,
+                qdim=qdim,
+                order=quadOrder
+            )
+            W = Diagonal(
+                assemble_weightmultivector_boundary(
+                    mesh,
+                    qdim=qdim,
+                    order=quadOrder
+                )
+            )
+            rhs -= (E' * W * h)[1:end .∉ [entriesToDrop]]
         else
             throw(DomainError(h,"Dimension Missmatch"))
         end
@@ -216,15 +343,33 @@ function compute_systemvector(mesh::Mesh, p::Float64, omega::AbstractVector{Floa
 end
 
 """
-    compute_upperbound(mesh::Mesh, p::Float64, b::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}}, omega::AbstractVector{Float64}, 
-                        hasNeumannBoundary::Bool, neumannElements::Set{Int64}, h::AbstractVector{Float64}, 
-                        hasSourceTerm::Bool, f::AbstractVector{Float64}, qdim::Int64) -> Float64
+    compute_upperbound(
+        mesh::Mesh,
+        p::Float64,
+        b::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}},
+        omega::AbstractVector{Float64}, 
+        hasNeumannBoundary::Bool,
+        neumannElements::Set{Int64},
+        h::AbstractVector{Float64}, 
+        hasSourceTerm::Bool,
+        f::AbstractVector{Float64},
+        qdim::Int64
+    ) -> Float64
 
 Computes constant upper bound R on the element derivative.
 """
-function compute_upperbound(mesh::Mesh, p::Float64, b::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}}, omega::AbstractVector{Float64}, 
-                            hasNeumannBoundary::Bool, neumannElements::Set{Int64}, h::AbstractVector{Float64}, 
-                            hasSourceTerm::Bool, f::AbstractVector{Float64}, qdim::Int64)
+function compute_upperbound(
+    mesh::Mesh,
+    p::Float64,
+    b::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}},
+    omega::AbstractVector{Float64}, 
+    hasNeumannBoundary::Bool,
+    neumannElements::Set{Int64},
+    h::AbstractVector{Float64}, 
+    hasSourceTerm::Bool,
+    f::AbstractVector{Float64},
+    qdim::Int64
+)
     L::Float64 = stripwidth(mesh)
     
     normg::Float64 = xpnorm(p, b, omega)
@@ -236,7 +381,14 @@ function compute_upperbound(mesh::Mesh, p::Float64, b::AbstractDict{Tuple{Int64,
     end
 
     if hasNeumannBoundary
-        normh = qnorm_boundary(p, h, mesh, boundaryElements=neumannElements, qdim=qdim, order=5)
+        normh = qnorm_boundary(
+            p,
+            h,
+            mesh,
+            boundaryElements=neumannElements,
+            qdim=qdim,
+            order=5
+        )
     end
 
     if p == 1
@@ -250,9 +402,20 @@ function compute_upperbound(mesh::Mesh, p::Float64, b::AbstractDict{Tuple{Int64,
 end
 
 """
-    compute_prolongation_harmonic(g::Function, mesh::Mesh, hasSourceTerm::Bool, f::Function, 
-    dirichletNodes::Set{Int64}, hasNeumannBoundary::Bool, h::Function, neumannElements::Set{Int64}, neumannNodes::Set{Int64}, 
-    solveLS::Function, preconditioner::Function; qdim=1) -> Vector{Float64}
+    compute_prolongation_harmonic(
+        g::Function,
+        mesh::Mesh,
+        hasSourceTerm::Bool,
+        f::Function, 
+        dirichletNodes::Set{Int64},
+        hasNeumannBoundary::Bool,
+        h::Function,
+        neumannElements::Set{Int64},
+        neumannNodes::Set{Int64}, 
+        solveLS::Function,
+        preconditioner::Function;
+        qdim::Int64=1
+    ) -> Vector{Float64}
     
 Returns solution of linear Laplace problem to prolongate boundary condition g to the domain.
 
@@ -270,22 +433,45 @@ Returns solution of linear Laplace problem to prolongate boundary condition g to
 - `qdim::Int64=1`: image dimension of f, h and g.
 
 """
-function compute_prolongation_harmonic(g::AbstractVector{Float64}, mesh::Mesh, hasSourceTerm::Bool, f::AbstractVector{Float64}, 
-                                        dirichletNodes::Set{Int64}, hasNeumannBoundary::Bool, h::AbstractVector{Float64}, neumannElements::Set{Int64}, 
-                                        solveLS::Function, preconditioner::Function; qdim::Int64=1)
-
+function compute_prolongation_harmonic(
+    g::AbstractVector{Float64},
+    mesh::Mesh,
+    hasSourceTerm::Bool,
+    f::AbstractVector{Float64}, 
+    dirichletNodes::Set{Int64},
+    hasNeumannBoundary::Bool,
+    h::AbstractVector{Float64},
+    neumannElements::Set{Int64}, 
+    solveLS::Function,
+    preconditioner::Function;
+    qdim::Int64=1
+)
     rhs = zeros(Float64, qdim*mesh.nnodes)
 
     if hasSourceTerm
         if length(f) == mesh.nnodes*qdim
-            M = assemble_massmatrix(mesh, qdim=qdim, order=3)
+            M = assemble_massmatrix(
+                mesh,
+                qdim=qdim,
+                order=3
+            )
             rhs += M * f
         elseif mod(length(f), mesh.nelems*qdim) == 0
             nPoints = length(f) / (mesh.nelems * qdim)
             quadOrder = quadrature_order(mesh.d, nPoints)
 
-            E = assemble_basismatrix(mesh, qdim=qdim, order=quadOrder)
-            W = Diagonal(assemble_weightmultivector(mesh, qdim=qdim, order=quadOrder))
+            E = assemble_basismatrix(
+                mesh,
+                qdim=qdim,
+                order=quadOrder
+            )
+            W = Diagonal(
+                assemble_weightmultivector(
+                    mesh,
+                    qdim=qdim,
+                    order=quadOrder
+                )
+            )
             rhs += E' * W * f
         else
             throw(DomainError(f,"Dimension Missmatch"))
@@ -294,14 +480,30 @@ function compute_prolongation_harmonic(g::AbstractVector{Float64}, mesh::Mesh, h
     
     if hasNeumannBoundary
         if length(h) == mesh.nnodes*qdim
-            N = assemble_massmatrix_boundary(mesh, boundaryElements=neumannElements, qdim=qdim, order=3)
+            N = assemble_massmatrix_boundary(
+                mesh,
+                boundaryElements=neumannElements,
+                qdim=qdim,
+                order=3
+            )
             rhs += N * h
         elseif mod(length(h), mesh.nboundelems*qdim) == 0
             nPoints = div(length(h), mesh.nboundelems * qdim)
             quadOrder = quadrature_order(mesh.d-1, nPoints)
 
-            E = assemble_basismatrix_boundary(mesh, boundaryElements=neumannElements, qdim=qdim, order=quadOrder)
-            W = Diagonal(assemble_weightmultivector_boundary(mesh, qdim=qdim, order=quadOrder))
+            E = assemble_basismatrix_boundary(
+                mesh,
+                boundaryElements=neumannElements,
+                qdim=qdim,
+                order=quadOrder
+            )
+            W = Diagonal(
+                assemble_weightmultivector_boundary(
+                    mesh,
+                    qdim=qdim,
+                    order=quadOrder
+                )
+            )
             rhs += E' * W * h
         else
             throw(DomainError(h,"Dimension Missmatch"))
@@ -315,28 +517,20 @@ function compute_prolongation_harmonic(g::AbstractVector{Float64}, mesh::Mesh, h
 end
 
 """
-    compute_prolongation_zero(g::AbstractVector{Float64}, mesh::Mesh; qdim::Int64=1) -> Vector{Float64}
+    compute_prolongation_zero(
+        g::AbstractVector{Float64},
+        mesh::Mesh;
+        qdim::Int64=1
+    ) -> Vector{Float64}
     
 Returns discrete prolongation of g to the whole domain by zero on every node.
 """
-function compute_prolongation_zero(g::AbstractVector{Float64}, mesh::Mesh; qdim::Int64=1)
+function compute_prolongation_zero(
+    g::AbstractVector{Float64},
+    mesh::Mesh;
+    qdim::Int64=1
+)
     return zeros(Float64, qdim*mesh.nnodes) .+ g
-end
-
-"""
-    compute_initialguess(S::StaticData) -> Vector{Float64}
-    
-Returns start vector for an auxilliary path-following scheme.
-"""
-function compute_initialguess(S::StaticData)
-    t = zeros(Float64, S.m)
-    for (key, val) in S.b
-        t += val.^2
-    end
-
-    s = 1 .+ t.^(S.p/2)
-
-    return [zeros(Float64, S.lengthu); s]
 end
 
 """
