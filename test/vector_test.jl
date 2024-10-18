@@ -13,23 +13,62 @@ function test_vector(p::Float64)
     f(x) = -p * 2^((p-2)/2) * (x[1]^2 + x[2]^2)^((p-2)/2) * [1,1]
 
     mesh = import_mesh("test_line.msh")
-    dirichletBoundary = select_boundaries(mesh)
+    dirichlet_boundary = select_boundaries(mesh)
     
-    outputData = solve_plaplace(p, mesh, g1, dirichletBoundary, f=f1, qdim=1, consoleOutput=false)
-    pnorm(2.0, outputData.v - evaluate_mesh_function(mesh, g1, qdim=1), mesh, qdim=1) > 1e-3 && return false
+    outputData = solve_plaplace(
+        p,
+        mesh,
+        g1,
+        dirichlet_boundary,
+        f = f1,
+        qdim = 1,
+        verbose = false
+    )
+    pnorm(
+        2.0,
+        outputData.v - evaluate_mesh_function(mesh, g1, qdim=1),
+        mesh,
+        qdim = 1
+    ) > 1e-3 && return false
 
     mesh = import_mesh("test_square.msh")
-    dirichletBoundary = select_boundaries(mesh)
+    dirichlet_boundary = select_boundaries(mesh)
     
-    outputData = solve_plaplace(p, mesh, g2, dirichletBoundary, f=f2, qdim=2, consoleOutput=false)
-    pnorm(2.0, outputData.v - evaluate_mesh_function(mesh, g2, qdim=2), mesh, qdim=2) > 1e-3 && return false
+    outputData = solve_plaplace(
+        p,
+        mesh,
+        g2,
+        dirichlet_boundary,
+        f = f2,
+        qdim = 2,
+        verbose = false
+    )
+    pnorm(
+        2.0,
+        outputData.v - evaluate_mesh_function(mesh, g2, qdim=2),
+        mesh,
+        qdim = 2
+    ) > 1e-3 && return false
 
 
     mesh = import_mesh("test_cube.msh")
-    dirichletBoundary = select_boundaries(mesh)
+    dirichlet_boundary = select_boundaries(mesh)
     
-    outputData = solve_plaplace(p, mesh, g3, dirichletBoundary, f=f3, qdim=3, consoleOutput=false)
-    pnorm(2.0, outputData.v - evaluate_mesh_function(mesh, g3, qdim=3), mesh, qdim=3) > 1e-3 && return false
+    outputData = solve_plaplace(
+        p,
+        mesh,
+        g3,
+        dirichlet_boundary,
+        f = f3,
+        qdim = 3,
+        verbose = false
+    )
+    pnorm(
+        2.0,
+        outputData.v - evaluate_mesh_function(mesh, g3, qdim=3),
+        mesh,
+        qdim = 3
+    ) > 1e-3 && return false
 
     return true
 end

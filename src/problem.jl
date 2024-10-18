@@ -1,88 +1,5 @@
 """
-    objective_functional(
-        u::AbstractVector{Float64},
-        p::Float64,
-        mesh::Mesh; 
-        f::AbstractVector{Float64}=Vector{Float64}(),
-        neumannBoundary::Set{Boundary}=Set{Boundary}(),
-        h::AbstractVector{Float64}=Vector{Float64}(),
-        qdim::Int64=1
-    )
-    objective_functional(
-        u::Function,
-        p::Float64,
-        mesh::Mesh; 
-        f::Function=emptyfunction,
-        neumannBoundary::Set{Boundary}=Set{Boundary}(),
-        h::Function=emptyfunction,
-        qdim::Int64=1
-    )
-
-Returns value of variational formulation functional for the p-Laplace problem
-evaluated at u. 
-"""
-function objective_functional(
-    u::AbstractVector{Float64},
-    p::Float64,
-    mesh::Mesh; 
-    f::AbstractVector{Float64}=Vector{Float64}(),
-    neumannBoundary::Set{Boundary}=Set{Boundary}(),
-    h::AbstractVector{Float64}=Vector{Float64}(),
-    qdim::Int64=1
-)
-    if p < 1
-        throw(DomainError(p, "This package only supports 1 ≤ p ≤ ∞."))
-    end
-
-    s = compute_sources(
-        u,
-        mesh,
-        neumannBoundary,
-        h,
-        f,
-        qdim
-    )
-
-    t = compute_plaplace_term(u, p, mesh, qdim)
-
-    return t + s
-end
-
-function objective_functional(
-    u::Function,
-    p::Float64,
-    mesh::Mesh; 
-    f::Function=emptyfunction,
-    neumannBoundary::Set{Boundary}=Set{Boundary}(),
-    h::Function=emptyfunction,
-    qdim::Int64=1
-)
-    _u = evaluate_mesh_function(mesh, u, qdim=qdim)
-    _f = f == emptyfunction ? 
-        zeros(Float64, mesh.nnodes * qdim) :
-        evaluate_mesh_function(mesh, f, qdim=qdim) 
-    _h = (isempty(neumannBoundary) || h == emptyfunction) ?
-        zeros(Float64, mesh.nnodes * qdim) :
-        evaluate_mesh_function(mesh, h, neumannBoundary, qdim=qdim)
-
-    return objective_functional(
-        _u,
-        p,
-        mesh,
-        f=_f,
-        neumannBoundary=neumannBoundary,
-        h=_h, 
-        qdim=qdim
-    )
-end
-
-"""
-    compute_plaplace_term(
-        u::AbstractVector{Float64},
-        p::Float64,
-        mesh::Mesh,
-        qdim::Int64
-    )
+$(TYPEDSIGNATURES)
 
 Computes value of characteristic derivative term in p-Laplace functional evaluated at u.
 """
@@ -91,7 +8,7 @@ function compute_plaplace_term(
     p::Float64,
     mesh::Mesh,
     qdim::Int64
-)
+) :: Float64
     D = assemble_derivativetensor(mesh, qdim=qdim)
     Du = zeros(Float64, mesh.nelems)
     for (key,val) in D
@@ -108,28 +25,22 @@ function compute_plaplace_term(
 end
 
 """
-    compute_sources(
-        u::AbstractVector{Float64},
-        mesh::Mesh,
-        neumannBoundary::Set{Boundary},
-        h::AbstractVector{Float64},
-        f::AbstractVector{Float64},
-        qdim::Int64
-    )    
+$(TYPEDSIGNATURES)
 
-Computes value of source terms in p-Laplace functional evaluated at u.
+Computes value of the required boundary and volume source terms for the p-Laplace
+functional evaluated at u.
 """
 function compute_sources(
     u::AbstractVector{Float64},
     mesh::Mesh,
-    neumannBoundary::Set{Boundary},
-    h::AbstractVector{Float64},
-    f::AbstractVector{Float64},
+    neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing},
+    h::Union{AbstractVector{Float64}, Function, Missing},
+    f::Union{AbstractVector{Float64}, Function, Missing},
     qdim::Int64
-)    
+) :: Float64
     rhs = zeros(Float64, qdim*mesh.nnodes)
     
-    if any(o -> o != 0, f)
+    if !ismissing(f) && any(o -> o != 0, f)
         if length(f) == mesh.nnodes*qdim
             M = assemble_massmatrix(
                 mesh,
@@ -159,13 +70,19 @@ function compute_sources(
         end
     end
     
-    if !isempty(neumannBoundary)
+    if !ismissing(neumann_boundary)
+        if neumann_boundary isa Set{Boundary}
+            belems = extract_elements(neumann_boundary)
+        else
+            belems = neumann_boundary
+        end
+        
         if length(h) == mesh.nnodes*qdim
             N = assemble_massmatrix_boundary(
                 mesh,
-                boundaryElements=extract_elements(neumannBoundary),
-                qdim=qdim,
-                order=3
+                boundaryElements = belems,
+                qdim = qdim,
+                order = 3
             )
             rhs -= N * h
         elseif mod(length(h),mesh.nboundelems*qdim) == 0
@@ -174,15 +91,15 @@ function compute_sources(
 
             E = assemble_basismatrix_boundary(
                 mesh,
-                boundaryElements=extract_elements(neumannBoundary),
-                qdim=qdim,
-                order=quadOrder
+                boundaryElements = belems,
+                qdim = qdim,
+                order = quadOrder
             )
             W = Diagonal(
                 assemble_weightmultivector_boundary(
                     mesh,
-                    qdim=qdim,
-                    order=quadOrder
+                    qdim = qdim,
+                    order = quadOrder
                 )
             )
             rhs -= E' * W * h
@@ -195,54 +112,86 @@ function compute_sources(
 end
 
 """
-    compute_errors(
-        anasol::Array{Float64,1},
-        numsol::Array{Float64,1},
-        mesh::Mesh,
-        neumannBoundary::Set{Boundary},
-        h::AbstractVector{Float64},
-        f::AbstractVector{Float64},
+    objective_functional(
+        u::AbstractVector{Float64},
         p::Float64,
-        qdim::Int64
+        mesh::Mesh; 
+        f::Union{AbstractVector{Float64}, Function, Missing} = missing,
+        neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing} = missing,
+        h::Union{AbstractVector{Float64}, Function, Missing} = missing,
+        qdim::Int64 = 1
+    ) -> Float64
+
+Returns value of variational formulation functional for the p-Laplace problem
+evaluated at u. 
+"""
+function objective_functional(
+    u::AbstractVector{Float64},
+    p::Float64,
+    mesh::Mesh; 
+    f::Union{AbstractVector{Float64}, Function, Missing} = missing,
+    neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing} = missing,
+    h::Union{AbstractVector{Float64}, Function, Missing} = missing,
+    qdim::Int64 = 1
+) :: Float64
+    if p < 1
+        throw(DomainError(p, "This package only supports 1 ≤ p ≤ ∞."))
+    end
+
+    s = compute_sources(
+        u,
+        mesh,
+        neumann_boundary,
+        h,
+        f,
+        qdim
     )
-    compute_errors(
-        anasol::Array{Float64,1},
-        outputData::PLaplaceData
-    )
+
+    t = compute_plaplace_term(u, p, mesh, qdim)
+
+    return t + s
+end
+
+"""
+$(TYPEDSIGNATURES)
 
 Returns various errors of numerical solution compared to given 
 discretized analytical solution. 
 First value is error in difference in objective value,
 then pointwise error L1, L2 and LInf norm.
+
+Intended to be called via a wrapper to ensure the discretized analytical solution
+and the numerical solution match the mesh.
 """
 function compute_errors(
     anasol::Array{Float64,1},
     numsol::Array{Float64,1},
     mesh::Mesh,
-    neumannBoundary::Set{Boundary},
-    h::AbstractVector{Float64},
-    f::AbstractVector{Float64},
+    neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing},
+    h::Union{AbstractVector{Float64}, Missing},
+    f::Union{AbstractVector{Float64}, Missing},
     p::Float64,
     qdim::Int64
-)
+) :: Array{Float64,1}
     error = anasol .- numsol 
 
     o1 = objective_functional(
         anasol,
         p,
         mesh,
-        f=f,
-        neumannBoundary=neumannBoundary,
-        h=h,
-        qdim=qdim)
+        f = f,
+        neumann_boundary = neumann_boundary,
+        h = h,
+        qdim = qdim
+    )
     o2 = objective_functional(
         numsol,
         p,
         mesh,
-        f=f,
-        neumannBoundary=neumannBoundary,
-        h=h,
-        qdim=qdim
+        f = f,
+        neumann_boundary = neumann_boundary,
+        h = h,
+        qdim = qdim
     )
 
     errors = [
@@ -253,20 +202,4 @@ function compute_errors(
     ]
 
     return errors
-end
-
-function compute_errors(
-    anasol::Array{Float64,1},
-    outputData::PLaplaceData
-)
-    return compute_errors(
-        anasol,
-        outputData.v,
-        outputData.mesh,
-        outputData.neumannBoundary,
-        outputData.h,
-        outputData.f,
-        outputData.p,
-        outputData.qdim
-    )
 end

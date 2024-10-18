@@ -9,22 +9,22 @@ function test_scalar(p::Float64)
     f3(x) = -(p+1) * norm(x,2)^(p-2)
 
     mesh = import_mesh("test_line.msh")
-    dirichletBoundary = select_boundaries(mesh)
+    dirichlet_boundary = select_boundaries(mesh)
     
-    outputData = solve_plaplace(p, mesh, g, dirichletBoundary, f=f1, consoleOutput=false)
+    outputData = solve_plaplace(p, mesh, g, dirichlet_boundary, f=f1, verbose=false)
     pnorm(2.0, outputData.v - evaluate_mesh_function(mesh, g), mesh) > 1e-3 && return false
 
     mesh = import_mesh("test_square.msh")
-    dirichletBoundary = select_boundaries(mesh)
+    dirichlet_boundary = select_boundaries(mesh)
     
-    outputData = solve_plaplace(p, mesh, g, dirichletBoundary, f=f2, consoleOutput=false)
+    outputData = solve_plaplace(p, mesh, g, dirichlet_boundary, f=f2, verbose=false)
     pnorm(2.0, outputData.v - evaluate_mesh_function(mesh, g), mesh) > 1e-3 && return false
 
 
     mesh = import_mesh("test_cube.msh")
-    dirichletBoundary = select_boundaries(mesh)
+    dirichlet_boundary = select_boundaries(mesh)
     
-    outputData = solve_plaplace(p, mesh, g, dirichletBoundary, f=f3, consoleOutput=false)
+    outputData = solve_plaplace(p, mesh, g, dirichlet_boundary, f=f3, verbose=false)
     pnorm(2.0, outputData.v - evaluate_mesh_function(mesh, g), mesh) > 1e-3 && return false
 
     return true

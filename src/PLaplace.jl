@@ -1,70 +1,97 @@
+"""
+    PLaplace
+
+A Solver for Problems of the p-Laplacian PDE Operator.
+
+This package imports the following packages:
+$(IMPORTS)
+"""
 module PLaplace
+    using MinFEM
+    using LinearAlgebra, SparseArrays, InvertedIndices
+    using IncompleteLU, IterativeSolvers, Preconditioners
+    using Printf, WriteVTK
+    using DocStringExtensions
 
-using MinFEM
-using LinearAlgebra, SparseArrays, InvertedIndices
-using IncompleteLU, IterativeSolvers, Preconditioners
-using Printf, WriteVTK
+    include("utility.jl")
 
-include("utility.jl")
-include("output.jl")
-include("linearsystems.jl")
-include("problem.jl")
-include("staticdata.jl")
+    include("linearsystems.jl")
+    include("staticdata.jl")
 
-include("barriers/barrierfunction.jl")
-include("barriers/finite.jl")
 
-include("iterationdata.jl")
-include("pathfollowing.jl")
-include("algorithm.jl")
+    include("barrierfunction.jl")
+    include("barriers/finite.jl")
 
-export  PLaplaceData,
-        ConditionData,
-        ErrorData
+    include("logbase.jl")
+    include("logdata.jl")
+    include("algorithmlog.jl")
 
-export  objective_functional,
-        compute_errors
+    include("tracking.jl")
+    include("iterationdata.jl")
+    include("algorithmdata.jl")
+    include("pathfollowing.jl")
 
-export  solve_plaplace
+    include("plaplacedata.jl")
 
-export  Mesh,
-        Boundary,
-        import_mesh,
-        select_boundaries
+    include("problem.jl")
+    include("errordata.jl")
 
-export  write_result_to_vtk,
-        write_log_header,
-        write_log,
-        write_error_header,
-        write_error,
-        print_defaultdata,
-        print_statistics,
-        read_condition,
-        read_error
+    include("algorithm.jl")
 
-export  assemble_derivativetensor,
-        assemble_derivativetensor_boundary,
-        assemble_derviativetensor_modified,
-        compute_derivative,
-        compute_normalderivative,
-        xpnorm
+    export  PLaplaceData,
+            AlgorithmLogData,
+            ErrorData
+
+    export  objective_functional,
+            compute_errors,
+            write_error_header,
+            check_error_header,
+            write_error,
+            read_error,
+            append!
+
+    export  solve_plaplace
+
+    export  Mesh,
+            Boundary,
+            import_mesh,
+            select_boundaries
+
+    export  hasresult,
+            write_result_to_vtk,
+            write_result_to_txt,
+            print_defaultdata,
+            print_statistics,
+            write_statistics_header,
+            check_statistics_header,
+            write_statistics,
+            read_algorithmlog
+
+    export  assemble_derivativetensor,
+            assemble_derivativetensor_boundary,
+            assemble_derviativetensor_modified,
+            compute_derivative,
+            compute_normalderivative,
+            xpnorm
         
-export  compute_prolongation_harmonic,
-        compute_prolongation_zero
+    export  compute_prolongation_harmonic,
+            compute_prolongation_zero
 
-export Stepsize
-for s in instances(Stepsize)
-    @eval export $(Symbol(s))
-end 
+    export  compute_lipschitzconstant_boundary
 
-export LinearSolver
-for s in instances(LinearSolver)
-    @eval export $(Symbol(s))
-end 
+    export Stepsize
+    for s in instances(Stepsize)
+        @eval export $(Symbol(s))
+    end 
 
-export Preconditioner
-for s in instances(Preconditioner)
-    @eval export $(Symbol(s))
-end
+    export LinearSolver
+    for s in instances(LinearSolver)
+        @eval export $(Symbol(s))
+    end 
+
+    export Preconditioner
+    for s in instances(Preconditioner)
+        @eval export $(Symbol(s))
+    end
 
 end

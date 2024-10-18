@@ -5,3 +5,10 @@
 *.pdf
 results/
 logs/
+
+docs/build/
+!docs/src/assets/**
+
+!logo/*
+
+**/Manifest.toml
