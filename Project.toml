@@ -1,9 +1,10 @@
 name = "PLaplace"
 uuid = "05599243-9ba8-485a-9b22-0f602ec9135f"
 authors = ["Henrik Wyschka <henrik.wyschka@uni-hamburg.de>"]
-version = "1.1.0"
+version = "2.0.0"
 
 [deps]
+DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 IncompleteLU = "40713840-3770-5561-ab4c-a76e7d0d7895"
 InvertedIndices = "41ab1584-1d38-5bbf-9106-f11c6c58b48f"
 IterativeSolvers = "42fd0dbc-a981-5370-80f2-aaf504508153"
@@ -15,10 +16,11 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
 [compat]
+DocStringExtensions = "^0.9"
 IncompleteLU = "^0.2"
 InvertedIndices = "^1.1"
 IterativeSolvers = "^0.9"
-MinFEM = "^2"
+MinFEM = "^2.2"
 Preconditioners = "^0.5"
 WriteVTK = "^1"
 julia = "^1.6"

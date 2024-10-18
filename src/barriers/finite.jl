@@ -1,8 +1,3 @@
-"""
-    isadmissible_finite(x::AbstractVector{Float64}, S::StaticData) -> Bool
-    
-Return true if the value x is in the admissible set and false otherwise.
-"""
 function isadmissible_finite(x::AbstractVector{Float64}, S::StaticData)
     z = zeros(Float64, S.m)
     for (key, val) in S.D
@@ -28,11 +23,6 @@ function isadmissible_finite(x::AbstractVector{Float64}, S::StaticData)
     return true
 end
 
-"""
-    compute_value_finite(x::AbstractVector{Float64}, S::StaticData) -> Float64
-
-Returns gradient of the barrier function at x for p finite.
-"""
 function compute_value_finite(x::AbstractVector{Float64}, S::StaticData)
     s = x[(S.lengthu + 1):(S.lengthu + S.m)]
     tau = S.R .- (S.omega .* s)
@@ -51,11 +41,6 @@ function compute_value_finite(x::AbstractVector{Float64}, S::StaticData)
     return -sum(log.(z)) - sum(log.(tau)) - S.alpha*sum(log.(s))
 end
 
-"""
-    compute_gradient_finite(x::AbstractVector{Float64}, S::StaticData) -> Vector{Float64}
-
-Returns gradient of the barrier function at x for p finite.
-"""
 function compute_gradient_finite(x::AbstractVector{Float64}, S::StaticData)
     s = x[(S.lengthu + 1):(S.lengthu + S.m)]
     tau = S.R .- (S.omega .* s)
@@ -85,11 +70,6 @@ function compute_gradient_finite(x::AbstractVector{Float64}, S::StaticData)
     return [Fu; Fs]
 end
 
-"""
-    compute_hessian_finite(x::AbstractVector{Float64}, S::StaticData) -> SparseMatrixCSC{Float64, Int64}
-
-Returns hessian of the barrier function at x for p finite.
-"""
 function compute_hessian_finite(x::AbstractVector{Float64}, S::StaticData)
     s = x[(S.lengthu + 1):(S.lengthu + S.m)]
     tau = S.R .- (S.omega .* s)

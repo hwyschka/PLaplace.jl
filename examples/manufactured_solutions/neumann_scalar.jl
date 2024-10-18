@@ -1,25 +1,19 @@
-using PLaplaceDev, MinFEMDev
+using PLaplace, MinFEM
 
 function testcase()
-    outputPath::String = "results/manufactured_solutions/neumann_scalar/"
-    mkpath(outputPath)
+    # Setup output
+    output_path::String = "results/manufactured_solutions/neumann_scalar/"
+    mkpath(output_path)
 
-    log_file = outputPath * "log.txt"
-    if !isfile(log_file)
-        write_log_header(log_file)
-    end
+    statistics_file = output_path * "statistics.txt"
+    write_statistics_header(statistics_file, guarded = true)
 
-    error_file = outputPath * "error.txt"
-    if !isfile(error_file)
-        write_error_header(error_file)
-    end
+    error_file = output_path * "errors.txt"
+    write_error_header(error_file, guarded=true)
 
-    eps::Float64 = 1e-6
-    stepsize::Stepsize = ADAPTIVE
-    kappa::Float64 = 10
-    maxIterations::Int64 = 10000
-    p::Float64 = 5
-    gridpointsPerDim::Int64 = 200
+    # Select PDE parameter(s)
+    #p::Float64 = 2.0
+    for p::Float64 in [2, 2.1, 2.5, 3, 4, 4.1, 4.8, 5, 6, 7, 8, 9, 10, 11, 12]
 
     f(x) = -p * (x[1]^2 + x[2]^2)^((p-2)/2)
     h(x) = x[1] > 0 ? 
@@ -27,41 +21,71 @@ function testcase()
         -x[1] * (x[1]^2 + x[2]^2)^((p-2)/2)
     g(x) = 0.5 * (x[1]^2 + x[2]^2)
 
-    mesh::Mesh = unit_square(gridpointsPerDim)
-    dirichletBoundary::Set{Boundary} = select_boundaries(mesh, 1001, 1004)
-    neumannBoundary::Set{Boundary} = select_boundaries(mesh, 1002, 1003)
+    # Select number(s) of gridpoints [ignored for gmsh]
+    ndim::Int64 = 200
+    #for ndim in [10, 20, 50, 100, 200, 500]
 
-    _h = evaluate_quadrature_function_boundary(mesh,h,neumannBoundary)
+    # Select unit square mesh or custom mesh
+    mesh::Mesh = unit_square(ndim)
+    #mesh::Mesh = import_mesh("meshes/square.msh")
 
-    outputData = solve_plaplace(
+    # Define boundary sets
+    dirichlet_boundary::Set{Boundary} = select_boundaries(mesh, 1001, 1004)
+    neumann_boundary::Set{Boundary} = select_boundaries(mesh, 1002, 1003)
+
+    _h = evaluate_quadrature_function_boundary(mesh, h, neumann_boundary)
+
+    # Select accuracy(s)
+    eps::Float64 = 1e-6
+    #for eps::Float64 in [1e-5, 1e-6, 1e-7]
+
+    # Select stepsize(s)
+    stepsize::Stepsize = ADAPTIVE
+    #for stepsize::Stepsize in [SHORT, LONG, ADAPTIVE]
+    
+    # Adjust other parameters
+    kappa::Float64 = 10
+    maxiterations::Int64 = 10000
+
+    # Solve p-Laplace equation
+    data = solve_plaplace(
         p,
         mesh,
         g,
-        dirichletBoundary,
-        f=f, 
-        h=_h,
-        neumannBoundary=neumannBoundary,
-        eps=eps,
-        stepsize=stepsize,
-        kappa=kappa,
-        maxIter=maxIterations
+        dirichlet_boundary,
+        f = f, 
+        h = _h,
+        neumann_boundary = neumann_boundary,
+        eps = eps,
+        stepsize = stepsize,
+        kappa = kappa,
+        maxiterations = maxiterations,
+        logfile = output_path * "log_p=$p-n=$(mesh.nnodes)-$eps-$stepsize",
+        logcondition = true
     )
 
-    mansol = evaluate_mesh_function(mesh, g)
+    write_statistics(statistics_file, data)
 
-    write_to_vtk(
-        [
-            outputData.v,
-            mansol,
-            outputData.v - mansol
-        ],
-        mesh, 
-        ["v", "v_analytic", "v - v_analytic"],
-        outputPath * "result_p=$p-n=$gridpointsPerDim-$eps-$stepsize"
-    )
+    if hasresult(data)
+        mansol = evaluate_mesh_function(mesh, g)
+        write_error(error_file, data, compute_errors(mansol, data))
+    
+        write_to_vtk(
+            [
+                data.v,
+                mansol,
+                data.v - mansol
+            ],
+            mesh, 
+            ["v", "v_analytic", "v - v_analytic"],
+            output_path * "result_p=$p-n=$(mesh.nnodes)-$eps-$stepsize"
+        )
+    end
 
-    write_log(log_file, outputData)
-    write_error(error_file, outputData, compute_errors(mansol, outputData))
+    end
+    #end
+    #end
+    #end
 end
 
 testcase()

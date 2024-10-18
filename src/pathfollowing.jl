@@ -1,43 +1,100 @@
 """
-    pathfollowing_auxilliary_adaptive(S::StaticData, I::IterationData)
+$(TYPEDEF)
 
-Executes auxilliary path-following with adaptive stepsize on the iteration data I and returns required iterations.
+Public type used to specify the stepping scheme of the path-following schemes.
+For more information see the [interior-point section](@ref path-following-theory)
+in the documentation.
+
+# Available Options
+- `SHORT`:
+    Regular update of the paramter t.
+- `LONG`:
+    Larger update of the parameter t if iterate fulfill approximate centering conditon.
+    Results in line-search for application of update on the iterate x.
+- `ADAPTIVE`:
+    Same as the long stepping, but the factor for the larger update is adaptively changed
+    depending on how many steps it required to fulfill the approximate centering condition.
 """
-function pathfollowing_auxilliary_adaptive(S::StaticData, I::IterationData)
+@enum Stepsize begin
+    SHORT
+    LONG
+    ADAPTIVE
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Executes auxilliary path-following with adaptive stepsize.
+
+The iteration is performed on the [IterationData](@ref), which will later store
+the final iterate as well as all the corresponding barrier terms.
+The number of required iterations and potential messages will be stored in
+[AlgorithmData](@ref).
+If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
+Further, if a file is provided, the log will be also exported to that file.
+"""
+function pathfollowing_auxilliary_adaptive!(
+    I::IterationData,
+    A::AlgorithmData,
+    S::StaticData,
+    L::LogData
+)
+    searchtracker = DescentTracker(0,0.0)
+    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    log_inital(L)
+
+    assemble!(I, S, tracker=assemblytracker)
+    handle_assembly!(A, L, assemblytracker,"A", 0)
+    
     t::Float64 = 1
     kappa::Float64 = S.kappa
+    maxIter::Int64 = S.maxIter
     
     iterationCount::Int64 = 0
     G::AbstractVector{Float64} = -I.gradientF
-    bound::Float64 = sqrt(S.beta)/(1+sqrt(S.beta))
+    bound::Float64 = sqrt(S.beta) / (1 + sqrt(S.beta))
 
     lastAccept::Int64 = 0
     lastAcceptedt::Float64 = t
-    lastAcceptedx::AbstractVector{Float64} = I.x
+    lastAcceptedx::AbstractVector{Float64} = I.x 
 
-    if S.logObjective
-        write_step(S.auxObjectiveFileName, 0, starnorm(G, I, S.solveLS))
+    if assemblytracker.singularity
+        iterationCount = -1
+        maxIter = 0
+    else
+        critnorm = starnorm(G, I, S.solveLS)
+
+        log_iteration(
+            L,
+            0, 0 , "A",
+            missing, missing, missing, missing,
+            missing, missing,
+            assemblytracker.conditionnumber,
+            critnorm, t, bound
+        )
+
+        if critnorm <= bound
+            iterationCount = 0
+            maxIter = 0
+        end
     end
 
-    if S.logCondition
-        write_step(S.auxConditionFileName, 0, I.conditionHessian)
-    end
+    for k = 1:maxIter
+        type::String = "A="
+        reset!(searchtracker)
+        reset!(assemblytracker)
 
-    for k = 1:S.maxIter
-        S.log("========================================================")
-        S.log("Auxiliary path following scheme - Step $k")
-        S.log("========================================================")
-        
         v = t * G + I.gradientF
         I.dx = S.solveLS(I.hessianF, v, I.P)
-        snorm = starnorm(v, I.dx)
+        accnorm = starnorm(v, I.dx)
 
-        if snorm <= S.beta 
-            S.log("Acceptance: $snorm ≤ $(S.beta)")
-            if lastAccept <= 2
-                kappa = min(S.kappa, kappa^2)
-            elseif lastAccept >= 8
-                kappa = sqrt(kappa)
+        if accnorm <= S.beta
+            if lastAccept <= S.kappa_updates[1]
+                kappa = min(S.kappa, kappa^(S.kappa_powers[1]))
+                type = "A+"
+            elseif lastAccept >= S.kappa_updates[2]
+                kappa = kappa^(S.kappa_powers[2])
+                type = "A-"
             end
             lastAccept = 0
             lastAcceptedt = t
@@ -46,75 +103,111 @@ function pathfollowing_auxilliary_adaptive(S::StaticData, I::IterationData)
             t = min(t / kappa, t - S.gamma / starnorm(G, I, S.solveLS))
             I.dx = S.solveLS(I.hessianF, t * G + I.gradientF, I.P)
         else
-            S.log("slow step: $snorm > $(S.beta)")
             lastAccept += 1
+            type = "S"
         end
 
-        if lastAccept < 15
-            apply_descent!(I,S)
+        if lastAccept < S.kappa_updates[3]
+            apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
+            handle_assembly!(A, L, assemblytracker,"A", k)
         else
             lastAccept = 0
+            type = "R"
             t = lastAcceptedt
-            kappa = kappa^(1/4)
+            kappa = kappa^(S.kappa_powers[3])
             set!(I, lastAcceptedx, S)
             
             if kappa < 1.000001
+                handle_kappavanish!(A, "A", k)
                 iterationCount = -k
-                I.msg *= " ⲕ too small  - "
-                S.log(I.msg)
                 break
             end
         end
 
-        if S.logCondition
-            write_step(S.auxConditionFileName, k, I.conditionHessian)
+        critnorm = Inf
+        if assemblytracker.singularity
+            iterationCount = -k
+            break
+        else
+            critnorm = starnorm(I.gradientF, I, S.solveLS)
         end
 
-        try
-            snorm = starnorm(I.gradientF, I, S.solveLS)
-        catch e
-            if isa(e, SingularException)
-                S.log("Hessian singular at t = $t")
-                I.msg *= " Hessian singular - "
-                iterationCount = -k    
-                break
-            else
-                rethrow()
-            end
-        end
-        
-        if S.logObjective
-            write_step(S.auxObjectiveFileName, k, snorm)
-        end
+        log_iteration(
+            L,
+            k, 0 , "A",
+            type, lastAccept, kappa, accnorm,
+            searchtracker.i, searchtracker.val,
+            assemblytracker.conditionnumber,
+            critnorm, t, bound
+        )
 
-        if snorm <= bound
-            S.log("Norm: $snorm ≤ $bound, t = $t")
+        if critnorm <= bound
             iterationCount = k
             break
         end
-        S.log("Norm $snorm > $bound, t = $t")
         
         if k == S.maxIter
-            S.log("Maximum number of iterations reached.")
-            I.msg *= " Exceeded iterations  - "
+            handle_maxiterations!(A, "A", k)
             iterationCount = -k
+            break
         end
     end
 
     if iterationCount > 0
         I.dx = S.solveLS(I.hessianF, I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false)
+        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
+        handle_assembly!(A, L, assemblytracker,"A", -1)
+
+        if assemblytracker.singularity
+            iterationCount *= -1
+        else
+            critnorm = starnorm(I.gradientF, I, S.solveLS)
+
+            log_iteration(
+                L,
+                missing, 0 , "A",
+                missing, missing, missing, missing,
+                missing, missing,
+                assemblytracker.conditionnumber,
+                critnorm, missing, S.beta
+            )
+
+            if critnorm > S.beta
+                handle_auxfail!(A)
+                iterationCount *= -1
+            end
+        end
     end
 
-    return iterationCount 
+    log_footer(L)
+
+    A.Naux = iterationCount
 end
 
 """
-    pathfollowing_main_adaptive(S::StaticData, I::IterationData)
+$(TYPEDSIGNATURES)
 
-Executes main path-following with adaptive stepsize on the iteration data I and returns required iterations.
+Executes main path-following with adaptive stepsize.
+
+The iteration is performed on the [IterationData](@ref), which will later store the final
+result.
+If the iteration did not converge, the last iterate will still be provided as a result and 
+the obtained accuracy stored in [AlgorithmData](@ref). 
+The number of required iterations and potential messages will be stored in
+[AlgorithmData](@ref) in any case.
+If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
+Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_main_adaptive(S::StaticData, I::IterationData)
+function pathfollowing_main_adaptive!(
+    I::IterationData,
+    A::AlgorithmData,
+    S::StaticData,
+    L::LogData
+)
+    searchtracker = DescentTracker(0,0.0)
+    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    log_inital(L)
+
     kappa::Float64 = S.kappa
     t::Float64 = 0
 
@@ -123,39 +216,23 @@ function pathfollowing_main_adaptive(S::StaticData, I::IterationData)
     lastAcceptedx::AbstractVector{Float64} = I.x
     
     iterationCount::Int64 = 0
-
-    if S.logCondition
-        write_step(S.mainConditionFileName, 0, I.conditionHessian)
-    end
     
     for k = 1:S.maxIter
-        S.log("========================================================")
-        S.log("Main path following scheme - Step $k")
-        S.log("========================================================")
+        type::String = "A="
+        reset!(searchtracker)
+        reset!(assemblytracker)
 
-        snorm::Float64 = 0
-        try
-            v = t * S.c + I.gradientF
-            I.dx = S.solveLS(I.hessianF, v, I.P)
-            snorm = starnorm(v, I.dx)
-        catch e
-            if isa(e, SingularException)
-                S.log("Hessian singular at t = $t < $(S.tolInv)")
-                I.msg *= " Hessian singular  - "
-                iterationCount = -(k-1)
-                S.eps = S.tolFactor / t    
-                break
-            else
-                rethrow()
-            end
-        end
+        v = t * S.c + I.gradientF
+        I.dx = S.solveLS(I.hessianF, v, I.P)
+        accnorm = starnorm(v, I.dx)
 
-        if snorm <= S.beta
-            S.log("t,x accepted: $snorm ≤ $(S.beta)")
-            if lastAccept <= 2
-                kappa = min(S.kappa, kappa^2)
-            elseif lastAccept >= 8
-                kappa = sqrt(kappa)
+        if accnorm <= S.beta
+            if lastAccept <= S.kappa_updates[1]
+                kappa = min(S.kappa, kappa^(S.kappa_powers[1]))
+                type = "A+"
+            elseif lastAccept >= S.kappa_updates[2]
+                kappa = kappa^(S.kappa_powers[2])
+                type = "A-"
             end
             lastAccept = 0
             lastAcceptedt = t
@@ -164,352 +241,469 @@ function pathfollowing_main_adaptive(S::StaticData, I::IterationData)
             t = max(kappa * t, t + (S.gamma / starnorm(S.c, I, S.solveLS)))
             I.dx = S.solveLS(I.hessianF, t * S.c + I.gradientF, I.P)
         else
-            S.log("slow step: $snorm > $(S.beta)")
             lastAccept += 1
+            type = "S"
         end
 
-        if lastAccept < 15
-            apply_descent!(I,S)
+        if lastAccept < S.kappa_updates[3]
+            apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
+            handle_assembly!(A, L, assemblytracker,"M", k)
+
+            if assemblytracker.singularity
+                handle_accuracy!(A, S.tolFactor/t)
+                iterationCount = -k
+                break
+            end
         else
             lastAccept = 0
+            type = "R"
             t = lastAcceptedt
-            kappa = kappa^(1/4)
+            kappa = kappa^(S.kappa_powers[3])
             set!(I, lastAcceptedx, S)
             
-            S.log("t,x rejected. New ⲕ = $(kappa)")
             if kappa < 1.000001
+                handle_kappavanish!(A, "M", k)
                 iterationCount = -k
-                S.eps = S.tolFactor / t   
-                I.msg *= " ⲕ too small  - "
-                S.log(I.msg)
                 break
             end
         end
 
-        if S.logObjective
-            write_step(S.mainObjectiveFileName, k, S.tolFactor / t)
-        end
-
-        if S.logCondition
-            write_step(S.mainConditionFileName, k, I.conditionHessian)
-        end
+        log_iteration(
+            L,
+            k, A.Naux , "M",
+            type, lastAccept, kappa, accnorm,
+            searchtracker.i, searchtracker.val,
+            assemblytracker.conditionnumber,
+            missing, t, S.tolInv
+        )
         
         if t >= S.tolInv
-            S.log("t = $t ≥ $(S.tolInv)")
             iterationCount = k
+            A.solution = I.x[1:S.lengthu]
             break
         end
-        S.log("t = $t < $(S.tolInv)")
 
         if k == S.maxIter
-            S.log("Maximum number of iterations reached.")
-            I.msg *= " Exceeded iterations  - "
+            handle_maxiterations!(A, "M", k)
             iterationCount = -k
             break
         end
     end
 
-    return iterationCount
+    log_footer(L)
+
+    A.Nmain = iterationCount 
 end
 
 """
-    pathfollowing_auxilliary_long(S::StaticData, I::IterationData)
+$(TYPEDSIGNATURES)
 
-Executes auxilliary path-following with long stepsize on the iteration data I and returns required iterations.
+Executes auxilliary path-following with long stepsize.
+
+The iteration is performed on the [IterationData](@ref), which will later store
+the final iterate as well as all the corresponding barrier terms.
+The number of required iterations and potential messages will be stored in
+[AlgorithmData](@ref).
+If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
+Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_auxilliary_long(S::StaticData, I::IterationData)
+function pathfollowing_auxilliary_long!(
+    I::IterationData,
+    A::AlgorithmData,
+    S::StaticData,
+    L::LogData
+)
+    searchtracker = DescentTracker(0,0.0)
+    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    log_inital(L)
+
+    assemble!(I, S, tracker=assemblytracker)
+    handle_assembly!(A, L, assemblytracker,"A", 0)
+    
     t::Float64 = 1
+    maxIter::Int64 = S.maxIter
 
     iterationCount::Int64 = 0
     G::AbstractVector{Float64} = -I.gradientF
-    bound::Float64 = sqrt(S.beta)/(1+sqrt(S.beta))
+    bound::Float64 = sqrt(S.beta) / (1 + sqrt(S.beta))
 
-    if S.logObjective
-        write_step(S.auxObjectiveFileName, 0, starnorm(G, I, S.solveLS))
+    if assemblytracker.singularity
+        iterationCount = 0
+        maxIter = 0
+    else
+        critnorm = starnorm(G, I, S.solveLS)
+
+        log_iteration(
+            L,
+            0, 0 , "A",
+            missing, missing, missing, missing,
+            missing, missing,
+            assemblytracker.conditionnumber,
+            critnorm, t, bound
+        )
+
+        if critnorm <= bound
+            iterationCount = 0
+            maxIter = 0
+        end
     end
 
-    if S.logCondition
-        write_step(S.auxConditionFileName, 0, I.conditionHessian)
-    end
-
-    for k = 1:S.maxIter
-        S.log("========================================================")
-        S.log("Auxiliary path following scheme - Step $k")
-        S.log("========================================================")
+    for k = 1:maxIter
+        type::String = "A"
+        reset!(searchtracker)
+        reset!(assemblytracker)
         
         v = t * G + I.gradientF
         I.dx = S.solveLS(I.hessianF, v, I.P)
-        snorm = starnorm(v, I.dx)
+        accnorm = starnorm(v, I.dx)
 
-        if snorm <= S.beta
-            S.log("t,x accepted: $snorm ≤ $(S.beta)") 
+        if accnorm <= S.beta
             t = min(t / S.kappa, t - S.gamma / starnorm(G, I, S.solveLS))
             I.dx = S.solveLS(I.hessianF, t * G + I.gradientF, I.P)
         else
-            S.log("slow step: $snorm > $(S.beta)")
+            type = "S"
         end
 
-        apply_descent!(I, S)    
-        
-        if S.logCondition
-            write_step(S.auxConditionFileName, k, I.conditionHessian)
+        apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
+        handle_assembly!(A, L, assemblytracker,"A", k)  
+
+        critnorm = Inf
+        if assemblytracker.singularity
+            iterationCount = -k
+            break
+        else
+            critnorm = starnorm(I.gradientF, I, S.solveLS)
         end
 
-        try
-            snorm = starnorm(I.gradientF, I, S.solveLS)
-        catch e
-            if isa(e, SingularException)
-                S.log("Hessian singular at t = $t")
-                I.msg *= " Hessian singular - "
-                iterationCount = -k    
-                break
-            else
-                rethrow()
-            end
-        end
-        
-        if S.logObjective
-            write_step(S.auxObjectiveFileName, k, snorm)
-        end
+        log_iteration(
+            L,
+            k, 0 , "A",
+            type, missing, missing, accnorm,
+            searchtracker.i, searchtracker.val,
+            assemblytracker.conditionnumber,
+            critnorm, t, bound
+        )
 
-        if snorm <= bound
-            S.log("Norm: $snorm ≤ $bound, t = $t")
+        if critnorm <= bound
             iterationCount = k
             break
         end
-        S.log("Norm: $snorm > $bound, t = $t")
         
         if k == S.maxIter
-            S.log("Maximum number of iterations reached.")
-            I.msg *= " Exceeded iterations  - "
+            handle_maxiterations!(A, "A", k)
             iterationCount = -k
         end
     end
 
     if iterationCount > 0
         I.dx = S.solveLS(I.hessianF, I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false)
+        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
+        handle_assembly!(A, L, assemblytracker,"A", -1)
+
+        if assemblytracker.singularity
+            iterationCount *= -1
+        else
+            critnorm = starnorm(I.gradientF, I, S.solveLS)
+
+            log_iteration(
+                L,
+                missing, 0 , "A",
+                missing, missing, missing, missing,
+                missing, missing,
+                assemblytracker.conditionnumber,
+                critnorm, missing, S.beta
+            )
+
+            if critnorm > S.beta
+                handle_auxfail!(A)
+                iterationCount *= -1
+            end
+        end
     end
 
-    return iterationCount 
+    log_footer(L)
+
+    A.Naux = iterationCount 
 end
 
 """
-    pathfollowing_main_long(S::StaticData, I::IterationData)
+$(TYPEDSIGNATURES)
 
-Executes main path-following with long stepsize on the iteration data I and returns required iterations.
+Executes main path-following with long stepsize.
+
+The iteration is performed on the [IterationData](@ref), which will later store the final
+result.
+If the iteration did not converge, the last iterate will still be provided as a result and 
+the obtained accuracy stored in [AlgorithmData](@ref). 
+The number of required iterations and potential messages will be stored in
+[AlgorithmData](@ref) in any case.
+If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
+Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_main_long(S::StaticData, I::IterationData)
+function pathfollowing_main_long!(
+    I::IterationData,
+    A::AlgorithmData,
+    S::StaticData,
+    L::LogData
+)
+    searchtracker = DescentTracker(0,0.0)
+    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    log_inital(L)
+    
     t::Float64 = 0
     iterationCount::Int64 = 0
 
-    if S.logCondition
-        write_step(S.mainConditionFileName, 0, I.conditionHessian)
-    end
-
     for k = 1:S.maxIter
-        S.log("========================================================")
-        S.log("Main path following scheme - Step $k")
-        S.log("========================================================")
+        type::String = "A"
+        reset!(searchtracker)
+        reset!(assemblytracker)
 
-        snorm::Float64 = 0
-        try
-            v = t * S.c + I.gradientF
-            I.dx = S.solveLS(I.hessianF, v, I.P)
-            snorm = starnorm(v, I.dx)
-        catch e
-            if isa(e, SingularException)
-                S.log("Hessian singular at t = $t < $(S.tolInv)")
-                I.msg *= " Hessian singular  - "
-                iterationCount = -(k-1)
-                S.eps = S.tolFactor / t    
-                break
-            else
-                rethrow()
-            end
-        end
+        v = t * S.c + I.gradientF
+        I.dx = S.solveLS(I.hessianF, v, I.P)
+        accnorm = starnorm(v, I.dx)
 
-        if snorm <= S.beta
-            S.log("t,x accepted: $snorm ≤ $(S.beta)") 
+
+        if accnorm <= S.beta
             t = max(S.kappa * t, t + (S.gamma / starnorm(S.c, I, S.solveLS)))
             I.dx = S.solveLS(I.hessianF, t * S.c + I.gradientF, I.P)
         else
-            S.log("slow step: $snorm > $(S.beta)")
+            type = "S"
         end
 
-        apply_descent!(I, S)
+        apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
+        handle_assembly!(A, L, assemblytracker,"M", k)
 
-        if S.logObjective
-            write_step(S.mainObjectiveFileName, k, S.tolFactor / t)
-        end
-
-        if S.logCondition
-            write_step(S.mainConditionFileName, k, I.conditionHessian)
-        end
-
-        if t >= S.tolInv
-            S.log("t = $t ≥ $(S.tolInv)")
-            iterationCount = k
+        if assemblytracker.singularity
+            handle_accuracy!(A, S.tolFactor/t)
+            iterationCount = -k
             break
         end
-        S.log("t = $t < $(S.tolInv)")
+
+        log_iteration(
+            L,
+            k, A.Naux , "M",
+            type, missing, missing, accnorm,
+            searchtracker.i, searchtracker.val,
+            assemblytracker.conditionnumber,
+            missing, t, S.tolInv
+        )
+
+        if t >= S.tolInv
+            iterationCount = k
+            A.solution = I.x[1:S.lengthu]
+            break
+        end
 
         if k == S.maxIter
-            S.log("Maximum number of iterations reached.")
-            I.msg *= " Exceeded iterations  - "
+            handle_maxiterations!(A, "M", k)
             iterationCount = -k
             break
         end
     end
 
-    return iterationCount
+    log_footer(L)
+
+    A.Nmain = iterationCount 
 end
 
 """
-    pathfollowing_auxilliary_short(S::StaticData, I::IterationData)
+$(TYPEDSIGNATURES)
 
-Executes auxilliary path-following with short stepsize on the iteration data I and returns required iterations.
+Executes auxilliary path-following with short stepsize.
+
+The iteration is performed on the [IterationData](@ref), which will later store
+the final iterate as well as all the corresponding barrier terms.
+The number of required iterations and potential messages will be stored in
+[AlgorithmData](@ref).
+If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
+Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_auxilliary_short(S::StaticData, I::IterationData)
+function pathfollowing_auxilliary_short!(
+    I::IterationData,
+    A::AlgorithmData,
+    S::StaticData,
+    L::LogData
+)
+    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    log_inital(L)
+
+    assemble!(I, S, tracker=assemblytracker)
+    handle_assembly!(A, L, assemblytracker,"A", 0)
+    
     t::Float64 = 1
+    maxIter::Int64 = S.maxIter
 
     iterationCount::Int64 = 0
     G::AbstractVector{Float64} = -I.gradientF
-    bound::Float64 = sqrt(S.beta)/(1+sqrt(S.beta))
+    bound::Float64 = sqrt(S.beta) / (1 + sqrt(S.beta))
 
-    if S.logObjective
-        write_step(S.auxObjectiveFileName, 0, starnorm(G, I, S.solveLS))
-    end
+    if assemblytracker.singularity
+        iterationCount = 0
+        maxIter = 0
+    else
+        critnorm = starnorm(G, I, S.solveLS)
 
-    if S.logCondition
-        write_step(S.auxConditionFileName, 0, I.conditionHessian)
+        log_iteration(
+            L,
+            0, 0 , "A",
+            missing, missing, missing, missing,
+            missing, missing,
+            assemblytracker.conditionnumber,
+            critnorm, t, bound
+        )
+
+        if critnorm <= bound
+            iterationCount = 0
+            maxIter = 0
+        end
     end
     
-    for k = 1:S.maxIter
-        S.log("========================================================")
-        S.log("Auxiliary path following scheme - Step $k")
-        S.log("========================================================")
+    for k = 1:maxIter
+        reset!(assemblytracker)
         
         t -= S.gamma / starnorm(G, I, S.solveLS)
         I.dx = S.solveLS(I.hessianF, t * G + I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false)
+        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
+        handle_assembly!(A, L, assemblytracker,"A", k)
 
-        if S.logCondition
-            write_step(S.auxConditionFileName, k, I.conditionHessian)
-        end
-
-        snorm::Float64 = 0
-        try
-            snorm = starnorm(I.gradientF, I, S.solveLS)
-        catch e
-            if isa(e, SingularException)
-                S.log("Hessian singular at t = $t")
-                I.msg *= " Hessian singular - "
-                iterationCount = -k    
-                break
-            else
-                rethrow()
-            end
+        critnorm = Inf
+        if assemblytracker.singularity
+            iterationCount = -k
+            break
+        else
+            critnorm = starnorm(I.gradientF, I, S.solveLS)
         end
         
-        if S.logObjective
-            write_step(S.auxObjectiveFileName, k, snorm)
-        end
+        log_iteration(
+            L,
+            k, 0 , "A",
+            missing, missing, missing, missing,
+            missing, missing,
+            assemblytracker.conditionnumber,
+            critnorm, t, bound
+        )
         
-        if snorm <= bound
-            S.log("Norm: $snorm ≤ $bound, t = $t")
+        if critnorm <= bound
             iterationCount = k
             break
-        end
-        S.log("Norm: $snorm > $bound, t = $t")      
+        end    
         
         if k == S.maxIter
-            S.log("Maximum number of iterations reached.")
-            I.msg *= " Exceeded iterations  - "
+            handle_maxiterations!(A, "A", k)
             iterationCount = -k
         end
     end
     
     if iterationCount > 0
         I.dx = S.solveLS(I.hessianF, I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false)
+        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
+        handle_assembly!(A, L, assemblytracker,"A", -1)
+
+        if assemblytracker.singularity
+            iterationCount *= -1
+        else
+            critnorm = starnorm(I.gradientF, I, S.solveLS)
+
+            log_iteration(
+                L,
+                missing, 0 , "A",
+                missing, missing, missing, missing,
+                missing, missing,
+                assemblytracker.conditionnumber,
+                critnorm, missing, S.beta
+            )
+
+            if critnorm > S.beta
+                handle_auxfail!(A)
+                iterationCount *= -1
+            end
+        end
     end
 
-    return iterationCount 
+    log_footer(L)
+
+    A.Naux = iterationCount 
 end
 
 """
-    pathfollowing_main_short(S::StaticData, I::IterationData)
+$(TYPEDSIGNATURES)
 
-Executes main path-following with short stepsize on the iteration data I and returns required iterations.
+Executes main path-following with short stepsize.
+
+The iteration is performed on the [IterationData](@ref), which will later store the final
+result.
+If the iteration did not converge, the last iterate will still be provided as a result and 
+the obtained accuracy stored in [AlgorithmData](@ref). 
+The number of required iterations and potential messages will be stored in
+[AlgorithmData](@ref) in any case.
+If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
+Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_main_short(S::StaticData, I::IterationData)
+function pathfollowing_main_short!(
+    I::IterationData,
+    A::AlgorithmData,
+    S::StaticData,
+    L::LogData
+)
+    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    log_inital(L)
+
     t::Float64 = 0
     iterationCount::Int64 = 0
-
-    if S.logCondition
-        write_step(S.mainConditionFileName, 0, I.conditionHessian)
-    end
     
     for k = 1:S.maxIter
-        S.log("========================================================")
-        S.log("Main path following scheme - Step $k")
-        S.log("========================================================")
-        
-        try
-            t += S.gamma / starnorm(S.c, I, S.solveLS)
-        catch e
-            if isa(e, SingularException)
-                S.log("Hessian singular at t = $t < $(S.tolInv)")
-                I.msg *= " Hessian singular  - "
-                iterationCount = -k
-                S.eps = S.tolFactor / t    
-                break
-            else
-                rethrow()
-            end
-        end
-        
-        I.dx = S.solveLS(I.hessianF, t * S.c + I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false)
-        
-        if S.logObjective
-            write_step(S.mainObjectiveFileName, k, S.tolFactor / t)
-        end
+        reset!(assemblytracker)
 
-        if S.logCondition
-            write_step(S.mainConditionFileName, k, I.conditionHessian)
-        end
+        t += S.gamma / starnorm(S.c, I, S.solveLS)
+        I.dx = S.solveLS(I.hessianF, t * S.c + I.gradientF, I.P)
         
-        if t >= S.tolInv
-            S.log("t = $t ≥ $(S.tolInv)")
-            iterationCount = k
+        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
+        handle_assembly!(A, L, assemblytracker,"M", k)
+
+        if assemblytracker.singularity
+            handle_accuracy!(A, S.tolFactor/t)
+            iterationCount = -k
             break
         end
-        S.log("t = $t < $(S.tolInv)")
+
+        log_iteration(
+            L,
+            k, A.Naux , "M",
+            missing, missing, missing, missing,
+            missing, missing,
+            assemblytracker.conditionnumber,
+            missing, t, S.tolInv
+        )
+        
+        if t >= S.tolInv
+            iterationCount = k
+            A.solution = I.x[1:S.lengthu]
+            break
+        end
 
         if k == S.maxIter
-            S.log("Maximum number of iterations reached.")
-            I.msg *= " Exceeded iterations  - "
+            handle_maxiterations!(A, "M", k)
             iterationCount = -k
             break
         end
     end
 
-    return iterationCount
+    log_footer(L)
+
+    A.Nmain = iterationCount 
 end
 
 """
-    select_pathfollowing(stepsize::Stepsize) -> Function, Function
+    select_pathfollowing(stepsize::Stepsize) -> Tuple{Function, Function}
     
 Returns functions for auxilliary and main pathfollowing dependend on the stepsize.
 """
-function select_pathfollowing(stepsize::Stepsize)  
+function select_pathfollowing(stepsize::Stepsize) :: Tuple{Function, Function}
     if stepsize === LONG
-        return pathfollowing_auxilliary_long, pathfollowing_main_long
+        return pathfollowing_auxilliary_long!, pathfollowing_main_long!
     elseif stepsize === ADAPTIVE
-        return pathfollowing_auxilliary_adaptive, pathfollowing_main_adaptive
+        return pathfollowing_auxilliary_adaptive!, pathfollowing_main_adaptive!
     else
-        return pathfollowing_auxilliary_short, pathfollowing_main_short
+        return pathfollowing_auxilliary_short!, pathfollowing_main_short!
     end
 end
