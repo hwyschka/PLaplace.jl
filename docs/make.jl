@@ -35,8 +35,9 @@ makedocs(
     sitename = "PLaplace.jl",
     authors = "Henrik Wyschka",
     format = FORMAT,
-    pages = PAGES,
-    remotes = nothing,
+    pages = PAGES
 )
 
-# deploydocs(repo = "github.com/hwyschka/PLaplace.jl.git")
+deploydocs(
+    repo = "github.com/hwyschka/PLaplace.jl.git"
+)
