@@ -151,7 +151,7 @@ $(TYPEDSIGNATURES)
 
 Returns value of source term based on the volume source `f` and the boundary source `h`
 evaluated at `u`.
-For more details see [source_terms](@ref).
+For more details see [sources_terms](@ref).
 """
 function compute_sources(
     u::AbstractVector{Float64},
