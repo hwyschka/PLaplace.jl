@@ -7,9 +7,9 @@ in the documentation.
 
 # Available Options
 - `SHORT`:
-    Regular update of the paramter t.
+    Regular update of the parameter t.
 - `LONG`:
-    Larger update of the parameter t if iterate fulfill approximate centering conditon.
+    Larger update of the parameter t if iterate fulfill approximate centering condition.
     Results in line-search for application of update on the iterate x.
 - `ADAPTIVE`:
     Same as the long stepping, but the factor for the larger update is adaptively changed
@@ -21,10 +21,16 @@ in the documentation.
     ADAPTIVE
 end
 
+Base.parse(E::Type{<:Enum}, str::String) =
+    let insts = instances(E) ,
+        p = findfirst(==(Symbol(str)) ∘ Symbol, insts) ;
+        p !== nothing ? insts[p] : nothing
+    end
+
 """
 $(TYPEDSIGNATURES)
 
-Executes auxilliary path-following with adaptive stepsize.
+Executes auxiliary path-following with adaptive stepsize.
 
 The iteration is performed on the [IterationData](@ref), which will later store
 the final iterate as well as all the corresponding barrier terms.
@@ -33,18 +39,22 @@ The number of required iterations and potential messages will be stored in
 If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
 Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_auxilliary_adaptive!(
+function pathfollowing_auxiliary_adaptive!(
     I::IterationData,
     A::AlgorithmData,
     S::StaticData,
     L::LogData
 )
-    searchtracker = DescentTracker(0,0.0)
-    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    starnormtracker = StarnormTracker()
+    descenttracker = DescentTracker()
+    assemblytracker = AssemblyTracker(
+        trackcondition = L.trackcondition,
+        trackhessian = L.exporthessian
+    )
     log_inital(L)
 
     assemble!(I, S, tracker=assemblytracker)
-    handle_assembly!(A, L, assemblytracker,"A", 0)
+    handle_assembly!(A, L, assemblytracker, "A", 0)
     
     t::Float64 = 1
     kappa::Float64 = S.kappa
@@ -56,13 +66,17 @@ function pathfollowing_auxilliary_adaptive!(
 
     lastAccept::Int64 = 0
     lastAcceptedt::Float64 = t
-    lastAcceptedx::AbstractVector{Float64} = I.x 
+    lastAcceptedx::AbstractVector{Float64} = I.x
+
+    rejection::Bool = false
+    isshort::Bool = false
+    skipfinalupdate::Bool = false
 
     if assemblytracker.singularity
         iterationCount = -1
         maxIter = 0
     else
-        critnorm = starnorm(G, I, S.solveLS)
+        critnorm = starnorm(G, I, S.solveLS, tracker=starnormtracker)
 
         log_iteration(
             L,
@@ -73,7 +87,18 @@ function pathfollowing_auxilliary_adaptive!(
             critnorm, t, bound
         )
 
-        if critnorm <= bound
+        if starnormtracker.failed
+            handle_starnorm!(A, "crit", "A", 0)
+            iterationCount = -1
+            maxIter = 0
+            skipfinalupdate = true
+        end
+
+        if critnorm <= S.beta
+            iterationCount = 0
+            maxIter = 0
+            skipfinalupdate = true
+        elseif critnorm <= bound
             iterationCount = 0
             maxIter = 0
         end
@@ -81,65 +106,108 @@ function pathfollowing_auxilliary_adaptive!(
 
     for k = 1:maxIter
         type::String = "A="
-        reset!(searchtracker)
+        reset!(descenttracker)
         reset!(assemblytracker)
 
         v = t * G + I.gradientF
         I.dx = S.solveLS(I.hessianF, v, I.P)
-        accnorm = starnorm(v, I.dx)
+        accnorm = starnorm(v, I.dx, tracker=starnormtracker)
+
+        if starnormtracker.failed
+            handle_starnorm!(A, "acc", "A", k)
+            iterationCount = -k
+            break
+        end
 
         if accnorm <= S.beta
-            if lastAccept <= S.kappa_updates[1]
-                kappa = min(S.kappa, kappa^(S.kappa_powers[1]))
-                type = "A+"
+            if rejection
+                if isshort
+                    handle_kappavanish!(A, "A", k)
+                    iterationCount = -k
+                    break
+                end
+
+                kappa = kappa^(S.kappa_powers[3])
+                type = "R"
             elseif lastAccept >= S.kappa_updates[2]
                 kappa = kappa^(S.kappa_powers[2])
                 type = "A-"
+            elseif lastAccept <= S.kappa_updates[1]
+                kappa = min(S.kappa, kappa^(S.kappa_powers[1]))
+                type = "A+"
             end
             lastAccept = 0
             lastAcceptedt = t
             lastAcceptedx = I.x
 
-            t = min(t / kappa, t - S.gamma / starnorm(G, I, S.solveLS))
-            I.dx = S.solveLS(I.hessianF, t * G + I.gradientF, I.P)
+            Gnorm = starnorm(G, I, S.solveLS, tracker=starnormtracker)
+
+            if starnormtracker.failed
+                handle_starnorm!(A, "G", "A", k)
+                iterationCount = -k
+                break
+            end
+
+            t_short = t - S.gamma / Gnorm
+            t_long = t / kappa
+            if t_long <  t_short
+                t = t_long
+                isshort = false
+            else
+                t = t_short
+                isshort = true
+            end
+
+            v = t * G + I.gradientF
+            I.dx = S.solveLS(I.hessianF, v, I.P)
         else
             lastAccept += 1
             type = "S"
         end
 
         if lastAccept < S.kappa_updates[3]
-            apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
-            handle_assembly!(A, L, assemblytracker,"A", k)
+            rejection = false
+            apply_descent!(
+                I, t, G, v, S,
+                tracker=descenttracker, assemblytracker=assemblytracker
+            )
+            handle_descent!(A, L, descenttracker, assemblytracker, "A", k)
         else
-            lastAccept = 0
-            type = "R"
+            rejection = true
             t = lastAcceptedt
-            kappa = kappa^(S.kappa_powers[3])
             set!(I, lastAcceptedx, S)
-            
-            if kappa < 1.000001
-                handle_kappavanish!(A, "A", k)
-                iterationCount = -k
-                break
-            end
         end
 
-        critnorm = Inf
-        if assemblytracker.singularity
+        if descenttracker.failed || assemblytracker.singularity
+            log_iteration(
+                L,
+                k, 0 , "A",
+                type, lastAccept, kappa, accnorm,
+                descenttracker.i, descenttracker.val,
+                assemblytracker.conditionnumber,
+                missing, t, bound
+            )
+
             iterationCount = -k
             break
-        else
-            critnorm = starnorm(I.gradientF, I, S.solveLS)
         end
+        
+        critnorm = starnorm(I.gradientF, I, S.solveLS, tracker=starnormtracker)
 
         log_iteration(
             L,
             k, 0 , "A",
             type, lastAccept, kappa, accnorm,
-            searchtracker.i, searchtracker.val,
+            descenttracker.i, descenttracker.val,
             assemblytracker.conditionnumber,
             critnorm, t, bound
         )
+
+        if starnormtracker.failed
+            handle_starnorm!(A, "crit", "A", k)
+            iterationCount = -k
+            break
+        end
 
         if critnorm <= bound
             iterationCount = k
@@ -153,15 +221,19 @@ function pathfollowing_auxilliary_adaptive!(
         end
     end
 
-    if iterationCount > 0
+    if iterationCount >= 0 && !skipfinalupdate
         I.dx = S.solveLS(I.hessianF, I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
-        handle_assembly!(A, L, assemblytracker,"A", -1)
+        apply_descent!(
+            I, missing, missing, I.gradientF, S,
+            force_nobacktracking=true,
+            tracker=descenttracker, assemblytracker=assemblytracker
+        )
+        handle_descent!(A, L, descenttracker, assemblytracker, "A", -1)
 
-        if assemblytracker.singularity
-            iterationCount *= -1
+        if descenttracker.failed || assemblytracker.singularity
+            iterationCount = iterationCount > 0 ? -iterationCount : -1
         else
-            critnorm = starnorm(I.gradientF, I, S.solveLS)
+            critnorm = starnorm(I.gradientF, I, S.solveLS, tracker=starnormtracker)
 
             log_iteration(
                 L,
@@ -172,9 +244,14 @@ function pathfollowing_auxilliary_adaptive!(
                 critnorm, missing, S.beta
             )
 
+            if starnormtracker.failed
+                handle_starnorm!(A, "crit", "A", -1)
+                iterationCount = iterationCount > 0 ? -iterationCount : -1
+            end
+
             if critnorm > S.beta
                 handle_auxfail!(A)
-                iterationCount *= -1
+                iterationCount = iterationCount > 0 ? -iterationCount : -1
             end
         end
     end
@@ -204,8 +281,12 @@ function pathfollowing_main_adaptive!(
     S::StaticData,
     L::LogData
 )
-    searchtracker = DescentTracker(0,0.0)
-    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    starnormtracker = StarnormTracker()
+    descenttracker = DescentTracker()
+    assemblytracker = AssemblyTracker(
+        trackcondition = L.trackcondition,
+        trackhessian = L.exporthessian
+    )
     log_inital(L)
 
     kappa::Float64 = S.kappa
@@ -214,73 +295,114 @@ function pathfollowing_main_adaptive!(
     lastAccept::Int64 = 0
     lastAcceptedt::Float64 = t
     lastAcceptedx::AbstractVector{Float64} = I.x
+
+    rejection::Bool = false # leads to automatic acceptance of first step by construction
+    isshort::Bool = false
     
     iterationCount::Int64 = 0
     
     for k = 1:S.maxIter
         type::String = "A="
-        reset!(searchtracker)
+        reset!(descenttracker)
         reset!(assemblytracker)
-
+ 
         v = t * S.c + I.gradientF
         I.dx = S.solveLS(I.hessianF, v, I.P)
-        accnorm = starnorm(v, I.dx)
+        accnorm = starnorm(v, I.dx, tracker=starnormtracker)
+
+        if starnormtracker.failed
+            handle_starnorm!(A, "acc", "M", k)
+            iterationCount = -k
+            break
+        end
 
         if accnorm <= S.beta
-            if lastAccept <= S.kappa_updates[1]
-                kappa = min(S.kappa, kappa^(S.kappa_powers[1]))
-                type = "A+"
+            if t >= S.tolInv
+                iterationCount = k
+                A.solution = I.x[1:S.lengthu]
+                break
+            end
+
+            if rejection
+                if isshort
+                    handle_kappavanish!(A, "M", k)
+                    iterationCount = -k
+                    break
+                end
+
+                kappa = kappa^(S.kappa_powers[3])
+                type = "R"
+                rejection = false
             elseif lastAccept >= S.kappa_updates[2]
                 kappa = kappa^(S.kappa_powers[2])
                 type = "A-"
+            elseif lastAccept <= S.kappa_updates[1]
+                kappa = min(S.kappa, kappa^(S.kappa_powers[1]))
+                type = "A+"
             end
             lastAccept = 0
             lastAcceptedt = t
             lastAcceptedx = I.x
 
-            t = max(kappa * t, t + (S.gamma / starnorm(S.c, I, S.solveLS)))
-            I.dx = S.solveLS(I.hessianF, t * S.c + I.gradientF, I.P)
+            cnorm = starnorm(S.c, I, S.solveLS, tracker=starnormtracker)
+
+            if starnormtracker.failed
+                handle_starnorm!(A, "c", "M", k)
+                iterationCount = -k
+                break
+            end
+
+            t_short = t + (S.gamma / cnorm)
+            t_long = t * kappa
+            if t_long >  t_short
+                t = t_long
+                isshort = false
+            else
+                t = t_short
+                isshort = true
+            end
+
+            v = t * S.c + I.gradientF
+            I.dx = S.solveLS(I.hessianF, v, I.P)
         else
             lastAccept += 1
             type = "S"
         end
 
         if lastAccept < S.kappa_updates[3]
-            apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
-            handle_assembly!(A, L, assemblytracker,"M", k)
+            apply_descent!(
+                I, t, S.c, v, S,
+                tracker=descenttracker, assemblytracker=assemblytracker
+            )
+            handle_descent!(A, L, descenttracker, assemblytracker, "M", k)
 
-            if assemblytracker.singularity
+            log_iteration(
+                L,
+                k, A.Naux , "M",
+                type, lastAccept, kappa, accnorm,
+                descenttracker.i, descenttracker.val,
+                assemblytracker.conditionnumber,
+                missing, t, S.tolInv
+            )
+
+            if descenttracker.failed || assemblytracker.singularity
                 handle_accuracy!(A, S.tolFactor/t)
                 iterationCount = -k
                 break
             end
         else
-            lastAccept = 0
-            type = "R"
-            t = lastAcceptedt
-            kappa = kappa^(S.kappa_powers[3])
-            set!(I, lastAcceptedx, S)
+            log_iteration(
+                L,
+                k, A.Naux , "M",
+                type, lastAccept, kappa, accnorm,
+                missing, missing,
+                missing,
+                missing, t, S.tolInv
+            )
             
-            if kappa < 1.000001
-                handle_kappavanish!(A, "M", k)
-                iterationCount = -k
-                break
-            end
-        end
-
-        log_iteration(
-            L,
-            k, A.Naux , "M",
-            type, lastAccept, kappa, accnorm,
-            searchtracker.i, searchtracker.val,
-            assemblytracker.conditionnumber,
-            missing, t, S.tolInv
-        )
-        
-        if t >= S.tolInv
-            iterationCount = k
-            A.solution = I.x[1:S.lengthu]
-            break
+            rejection = true
+            t = lastAcceptedt
+            set!(I, lastAcceptedx, S)
         end
 
         if k == S.maxIter
@@ -298,7 +420,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Executes auxilliary path-following with long stepsize.
+Executes auxiliary path-following with long stepsize.
 
 The iteration is performed on the [IterationData](@ref), which will later store
 the final iterate as well as all the corresponding barrier terms.
@@ -307,18 +429,22 @@ The number of required iterations and potential messages will be stored in
 If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
 Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_auxilliary_long!(
+function pathfollowing_auxiliary_long!(
     I::IterationData,
     A::AlgorithmData,
     S::StaticData,
     L::LogData
 )
-    searchtracker = DescentTracker(0,0.0)
-    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    starnormtracker = StarnormTracker()
+    descenttracker = DescentTracker()
+    assemblytracker = AssemblyTracker(
+        trackcondition = L.trackcondition,
+        trackhessian = L.exporthessian
+    )
     log_inital(L)
 
     assemble!(I, S, tracker=assemblytracker)
-    handle_assembly!(A, L, assemblytracker,"A", 0)
+    handle_assembly!(A, L, assemblytracker, "A", 0)
     
     t::Float64 = 1
     maxIter::Int64 = S.maxIter
@@ -327,11 +453,13 @@ function pathfollowing_auxilliary_long!(
     G::AbstractVector{Float64} = -I.gradientF
     bound::Float64 = sqrt(S.beta) / (1 + sqrt(S.beta))
 
+    skipfinalupdate::Bool = false
+
     if assemblytracker.singularity
-        iterationCount = 0
+        iterationCount = -1
         maxIter = 0
     else
-        critnorm = starnorm(G, I, S.solveLS)
+        critnorm = starnorm(G, I, S.solveLS, tracker=starnormtracker)
 
         log_iteration(
             L,
@@ -342,7 +470,18 @@ function pathfollowing_auxilliary_long!(
             critnorm, t, bound
         )
 
-        if critnorm <= bound
+        if starnormtracker.failed
+            handle_starnorm!(A, "crit", "A", 0)
+            iterationCount = -1
+            maxIter = 0
+            skipfinalupdate = true
+        end
+
+        if critnorm <= S.beta
+            iterationCount = 0
+            maxIter = 0
+            skipfinalupdate = true
+        elseif critnorm <= bound
             iterationCount = 0
             maxIter = 0
         end
@@ -350,39 +489,71 @@ function pathfollowing_auxilliary_long!(
 
     for k = 1:maxIter
         type::String = "A"
-        reset!(searchtracker)
+        reset!(descenttracker)
         reset!(assemblytracker)
         
         v = t * G + I.gradientF
         I.dx = S.solveLS(I.hessianF, v, I.P)
-        accnorm = starnorm(v, I.dx)
+        accnorm = starnorm(v, I.dx, tracker=starnormtracker)
+
+        if starnormtracker.failed
+            handle_starnorm!(A, "acc", "A", k)
+            iterationCount = -k
+            break
+        end
 
         if accnorm <= S.beta
-            t = min(t / S.kappa, t - S.gamma / starnorm(G, I, S.solveLS))
-            I.dx = S.solveLS(I.hessianF, t * G + I.gradientF, I.P)
+            Gnorm = starnorm(G, I, S.solveLS, tracker=starnormtracker)
+
+            if starnormtracker.failed
+                handle_starnorm!(A, "G", "A", k)
+                iterationCount = -k
+                break
+            end
+
+            t = min(t / S.kappa, t - S.gamma / Gnorm)
+            v = t * G + I.gradientF
+            I.dx = S.solveLS(I.hessianF, v, I.P)
         else
             type = "S"
         end
 
-        apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
-        handle_assembly!(A, L, assemblytracker,"A", k)  
+        apply_descent!(
+            I, t, G, v, S,
+            tracker=descenttracker, assemblytracker=assemblytracker
+        )
+        handle_descent!(A, L, descenttracker, assemblytracker, "A", k)  
 
-        critnorm = Inf
-        if assemblytracker.singularity
+        if descenttracker.failed || assemblytracker.singularity
+            log_iteration(
+                L,
+                k, 0 , "A",
+                type, lastAccept, kappa, accnorm,
+                descenttracker.i, descenttracker.val,
+                assemblytracker.conditionnumber,
+                missing, t, bound
+            )
+
             iterationCount = -k
             break
-        else
-            critnorm = starnorm(I.gradientF, I, S.solveLS)
         end
+        
+        critnorm = starnorm(I.gradientF, I, S.solveLS, tracker=starnormtracker)
 
         log_iteration(
             L,
             k, 0 , "A",
             type, missing, missing, accnorm,
-            searchtracker.i, searchtracker.val,
+            descenttracker.i, descenttracker.val,
             assemblytracker.conditionnumber,
             critnorm, t, bound
         )
+
+        if starnormtracker.failed
+            handle_starnorm!(A, "crit", "A", k)
+            iterationCount = -k
+            break
+        end
 
         if critnorm <= bound
             iterationCount = k
@@ -395,15 +566,19 @@ function pathfollowing_auxilliary_long!(
         end
     end
 
-    if iterationCount > 0
+    if iterationCount >= 0 && !skipfinalupdate
         I.dx = S.solveLS(I.hessianF, I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
-        handle_assembly!(A, L, assemblytracker,"A", -1)
+        apply_descent!(
+            I, missing, missing, I.gradientF, S,
+            force_nobacktracking=true,
+            tracker=descenttracker, assemblytracker=assemblytracker
+        )
+        handle_descent!(A, L, descenttracker, assemblytracker, "A", -1)
 
-        if assemblytracker.singularity
-            iterationCount *= -1
+        if descenttracker.failed || assemblytracker.singularity
+            iterationCount = iterationCount > 0 ? -iterationCount : -1
         else
-            critnorm = starnorm(I.gradientF, I, S.solveLS)
+            critnorm = starnorm(I.gradientF, I, S.solveLS, tracker=starnormtracker)
 
             log_iteration(
                 L,
@@ -414,9 +589,14 @@ function pathfollowing_auxilliary_long!(
                 critnorm, missing, S.beta
             )
 
+            if starnormtracker.failed
+                handle_starnorm!(A, "crit", "A", -1)
+                iterationCount = iterationCount > 0 ? -iterationCount : -1
+            end
+
             if critnorm > S.beta
                 handle_auxfail!(A)
-                iterationCount *= -1
+                iterationCount = iterationCount > 0 ? -iterationCount : -1
             end
         end
     end
@@ -446,8 +626,12 @@ function pathfollowing_main_long!(
     S::StaticData,
     L::LogData
 )
-    searchtracker = DescentTracker(0,0.0)
-    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    starnormtracker = StarnormTracker()
+    descenttracker = DescentTracker()
+    assemblytracker = AssemblyTracker(
+        trackcondition = L.trackcondition,
+        trackhessian = L.exporthessian
+    )
     log_inital(L)
     
     t::Float64 = 0
@@ -455,42 +639,59 @@ function pathfollowing_main_long!(
 
     for k = 1:S.maxIter
         type::String = "A"
-        reset!(searchtracker)
+        reset!(descenttracker)
         reset!(assemblytracker)
 
         v = t * S.c + I.gradientF
         I.dx = S.solveLS(I.hessianF, v, I.P)
-        accnorm = starnorm(v, I.dx)
+        accnorm = starnorm(v, I.dx, tracker=starnormtracker)
 
+        if starnormtracker.failed
+            handle_starnorm!(A, "acc", "M", k)
+            iterationCount = -k
+            break
+        end
 
         if accnorm <= S.beta
-            t = max(S.kappa * t, t + (S.gamma / starnorm(S.c, I, S.solveLS)))
-            I.dx = S.solveLS(I.hessianF, t * S.c + I.gradientF, I.P)
+            if t >= S.tolInv
+                iterationCount = k
+                A.solution = I.x[1:S.lengthu]
+                break
+            end
+
+            cnorm = starnorm(S.c, I, S.solveLS, tracker=starnormtracker)
+
+            if starnormtracker.failed
+                handle_starnorm!(A, "c", "M", k)
+                iterationCount = -k
+                break
+            end
+
+            t = max(S.kappa * t, t + (S.gamma / cnorm))
+            v = t * S.c + I.gradientF
+            I.dx = S.solveLS(I.hessianF, v, I.P)
         else
             type = "S"
         end
 
-        apply_descent!(I, S, tracker=searchtracker, assemblytracker=assemblytracker)
-        handle_assembly!(A, L, assemblytracker,"M", k)
-
-        if assemblytracker.singularity
-            handle_accuracy!(A, S.tolFactor/t)
-            iterationCount = -k
-            break
-        end
+        apply_descent!(
+            I, t, S.c, v, S,
+            tracker=descenttracker, assemblytracker=assemblytracker
+        )
+        handle_descent!(A, L, descenttracker, assemblytracker, "M", k)
 
         log_iteration(
             L,
             k, A.Naux , "M",
             type, missing, missing, accnorm,
-            searchtracker.i, searchtracker.val,
+            descenttracker.i, descenttracker.val,
             assemblytracker.conditionnumber,
             missing, t, S.tolInv
         )
-
-        if t >= S.tolInv
-            iterationCount = k
-            A.solution = I.x[1:S.lengthu]
+        
+        if descenttracker.failed || assemblytracker.singularity
+            handle_accuracy!(A, S.tolFactor/t)
+            iterationCount = -k
             break
         end
 
@@ -509,7 +710,7 @@ end
 """
 $(TYPEDSIGNATURES)
 
-Executes auxilliary path-following with short stepsize.
+Executes auxiliary path-following with short stepsize.
 
 The iteration is performed on the [IterationData](@ref), which will later store
 the final iterate as well as all the corresponding barrier terms.
@@ -518,13 +719,18 @@ The number of required iterations and potential messages will be stored in
 If [LogData](@ref) is verbose, data per iteration will be written to the output stream.
 Further, if a file is provided, the log will be also exported to that file.
 """
-function pathfollowing_auxilliary_short!(
+function pathfollowing_auxiliary_short!(
     I::IterationData,
     A::AlgorithmData,
     S::StaticData,
     L::LogData
 )
-    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    starnormtracker = StarnormTracker()
+    descenttracker = DescentTracker()
+    assemblytracker = AssemblyTracker(
+        trackcondition = L.trackcondition,
+        trackhessian = L.exporthessian
+    )
     log_inital(L)
 
     assemble!(I, S, tracker=assemblytracker)
@@ -537,11 +743,13 @@ function pathfollowing_auxilliary_short!(
     G::AbstractVector{Float64} = -I.gradientF
     bound::Float64 = sqrt(S.beta) / (1 + sqrt(S.beta))
 
+    skipfinalupdate::Bool = false
+
     if assemblytracker.singularity
-        iterationCount = 0
+        iterationCount = -1
         maxIter = 0
     else
-        critnorm = starnorm(G, I, S.solveLS)
+        critnorm = starnorm(G, I, S.solveLS, tracker=starnormtracker)
 
         log_iteration(
             L,
@@ -552,36 +760,75 @@ function pathfollowing_auxilliary_short!(
             critnorm, t, bound
         )
 
-        if critnorm <= bound
+        if starnormtracker.failed
+            handle_starnorm!(A, "crit", "A", 0)
+            iterationCount = -1
+            maxIter = 0
+            skipfinalupdate = true
+        end
+
+        if critnorm <= S.beta
+            iterationCount = 0
+            maxIter = 0
+            skipfinalupdate = true
+        elseif critnorm <= bound
             iterationCount = 0
             maxIter = 0
         end
     end
     
     for k = 1:maxIter
+        reset!(descenttracker)
         reset!(assemblytracker)
         
-        t -= S.gamma / starnorm(G, I, S.solveLS)
-        I.dx = S.solveLS(I.hessianF, t * G + I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
-        handle_assembly!(A, L, assemblytracker,"A", k)
+        Gnorm = starnorm(G, I, S.solveLS, tracker=starnormtracker)
 
-        critnorm = Inf
-        if assemblytracker.singularity
+        if starnormtracker.failed
+            handle_starnorm!(A, "G", "A", k)
             iterationCount = -k
             break
-        else
-            critnorm = starnorm(I.gradientF, I, S.solveLS)
         end
-        
+
+        t -= S.gamma / Gnorm
+        v = t * G + I.gradientF
+        I.dx = S.solveLS(I.hessianF, v, I.P)
+        apply_descent!(
+            I, t, G, v, S,
+            backtracking=false, 
+            tracker=descenttracker, assemblytracker=assemblytracker
+        )
+        handle_descent!(A, L, descenttracker, assemblytracker, "A", k)
+
+        if descenttracker.failed || assemblytracker.singularity
+            log_iteration(
+                L,
+                k, 0 , "A",
+                missing, missing, missing, missing,
+                descenttracker.i, descenttracker.val,
+                assemblytracker.conditionnumber,
+                missing, t, bound
+            )
+
+            iterationCount = -k
+            break
+        end
+            
+        critnorm = starnorm(I.gradientF, I, S.solveLS, tracker=starnormtracker)
+
         log_iteration(
             L,
             k, 0 , "A",
             missing, missing, missing, missing,
-            missing, missing,
+            descenttracker.i, descenttracker.val,
             assemblytracker.conditionnumber,
             critnorm, t, bound
         )
+
+        if starnormtracker.failed
+            handle_starnorm!(A, "crit", "A", k)
+            iterationCount = -k
+            break
+        end
         
         if critnorm <= bound
             iterationCount = k
@@ -594,15 +841,19 @@ function pathfollowing_auxilliary_short!(
         end
     end
     
-    if iterationCount > 0
+    if iterationCount >= 0 && !skipfinalupdate
         I.dx = S.solveLS(I.hessianF, I.gradientF, I.P)
-        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
-        handle_assembly!(A, L, assemblytracker,"A", -1)
+        apply_descent!(
+            I, missing, missing, I.gradientF, S,
+            force_nobacktracking=true,
+            tracker=descenttracker, assemblytracker=assemblytracker 
+        )
+        handle_descent!(A, L, descenttracker, assemblytracker, "A", -1)
 
-        if assemblytracker.singularity
-            iterationCount *= -1
+        if descenttracker.failed || assemblytracker.singularity
+            iterationCount = iterationCount > 0 ? -iterationCount : -1
         else
-            critnorm = starnorm(I.gradientF, I, S.solveLS)
+            critnorm = starnorm(I.gradientF, I, S.solveLS, tracker=starnormtracker)
 
             log_iteration(
                 L,
@@ -613,9 +864,14 @@ function pathfollowing_auxilliary_short!(
                 critnorm, missing, S.beta
             )
 
+            if starnormtracker.failed
+                handle_starnorm!(A, "crit", "A", -1)
+                iterationCount = iterationCount > 0 ? -iterationCount : -1
+            end
+
             if critnorm > S.beta
                 handle_auxfail!(A)
-                iterationCount *= -1
+                iterationCount = iterationCount > 0 ? -iterationCount : -1
             end
         end
     end
@@ -645,35 +901,54 @@ function pathfollowing_main_short!(
     S::StaticData,
     L::LogData
 )
-    assemblytracker = AssemblyTracker(trackcondition=L.trackcondition)
+    starnormtracker = StarnormTracker()
+    descenttracker = DescentTracker()
+    assemblytracker = AssemblyTracker(
+        trackcondition = L.trackcondition,
+        trackhessian = L.exporthessian
+    )
     log_inital(L)
 
     t::Float64 = 0
     iterationCount::Int64 = 0
     
     for k = 1:S.maxIter
+        reset!(descenttracker)
         reset!(assemblytracker)
 
-        t += S.gamma / starnorm(S.c, I, S.solveLS)
-        I.dx = S.solveLS(I.hessianF, t * S.c + I.gradientF, I.P)
-        
-        apply_descent!(I, S, useBacktracking=false, assemblytracker=assemblytracker)
-        handle_assembly!(A, L, assemblytracker,"M", k)
+        cnorm = starnorm(S.c, I, S.solveLS, tracker=starnormtracker)
 
-        if assemblytracker.singularity
-            handle_accuracy!(A, S.tolFactor/t)
+        if starnormtracker.failed
+            handle_starnorm!(A, "c", "M", k)
             iterationCount = -k
             break
         end
+
+        t += S.gamma / cnorm
+        v = t * S.c + I.gradientF
+        I.dx = S.solveLS(I.hessianF, v, I.P)
+        
+        apply_descent!(
+            I, t, S.c, v, S,
+            backtracking=false,
+            tracker=descenttracker, assemblytracker=assemblytracker
+        )
+        handle_descent!(A, L, descenttracker, assemblytracker, "M", k)
 
         log_iteration(
             L,
             k, A.Naux , "M",
             missing, missing, missing, missing,
-            missing, missing,
+            descenttracker.i, descenttracker.val,
             assemblytracker.conditionnumber,
             missing, t, S.tolInv
         )
+
+        if descenttracker.failed || assemblytracker.singularity
+            handle_accuracy!(A, S.tolFactor/t)
+            iterationCount = -k
+            break
+        end
         
         if t >= S.tolInv
             iterationCount = k
@@ -696,14 +971,14 @@ end
 """
     select_pathfollowing(stepsize::Stepsize) -> Tuple{Function, Function}
     
-Returns functions for auxilliary and main pathfollowing dependend on the stepsize.
+Returns functions for auxiliary and main pathfollowing dependend on the stepsize.
 """
 function select_pathfollowing(stepsize::Stepsize) :: Tuple{Function, Function}
     if stepsize === LONG
-        return pathfollowing_auxilliary_long!, pathfollowing_main_long!
+        return pathfollowing_auxiliary_long!, pathfollowing_main_long!
     elseif stepsize === ADAPTIVE
-        return pathfollowing_auxilliary_adaptive!, pathfollowing_main_adaptive!
+        return pathfollowing_auxiliary_adaptive!, pathfollowing_main_adaptive!
     else
-        return pathfollowing_auxilliary_short!, pathfollowing_main_short!
+        return pathfollowing_auxiliary_short!, pathfollowing_main_short!
     end
 end

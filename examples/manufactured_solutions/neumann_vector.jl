@@ -13,7 +13,7 @@ function testcase()
 
     # Select PDE parameter(s)
     #p::Float64 = 2.0
-    for p::Float64 in [2, 2.1, 2.5, 3, 4, 4.1, 4.8, 5, 6, 7, 8, 9, 10, 11, 12]
+    for p::Float64 in [2, 2.1, 2.5, 3, 4, 4.1, 4.8, 5, 6, 7, 8]
 
     # Finite manufactured solution
     f(x) = -p * 2^((p-2)/2) * (x[1]^2 + x[2]^2)^((p-2)/2) * [1,1]
@@ -24,7 +24,7 @@ function testcase()
 
 
     # Select number(s) of gridpoints [ignored for gmsh]
-    ndim::Int64 = 200
+    #ndim::Int64 = 200
     #for ndim in [10, 20, 50, 100, 200, 500]
 
     # Select unit square mesh or custom mesh
@@ -39,7 +39,7 @@ function testcase()
 
     # Select accuracy(s)
     eps::Float64 = 1e-6
-    #for eps::Float64 in [1e-5, 1e-6, 1e-7]
+    #for eps::Float64 in [1e-2,1e-3,1e-4,1e-5, 1e-6, 1e-7,1e-8,1e-9,1e-10]
 
     # Select stepsize(s)
     stepsize::Stepsize = ADAPTIVE

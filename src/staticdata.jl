@@ -28,7 +28,7 @@ mutable struct StaticData
 
     "System vector for convex optimization problem"
     c::AbstractVector{Float64}
-    "Upper bound for auxilliary variable"
+    "Upper bound for auxiliary variable"
     R::Float64
 
     "Vector of element weights"
@@ -60,10 +60,19 @@ mutable struct StaticData
     kappa_updates::Array{Int64}
     "Powers in the update that is applied to kappa in the relevant ranges"
     kappa_powers::Array{Float64}
-    "Maximal number of iterations for backtracking in long and adaptive path-following"
-    maxIterationsBacktracking::Int64
-    "Decrement factor for backtracking in long and adaptive path-following"
-    decrementFactorBacktracking::Float64
+
+    "Flag for using damped Newton steps"
+    damping::Bool
+    "Potential override for use of backtracking by default only in long and adaptive scheme"
+    backtracking_override::Union{Bool, Missing}
+    "Maximal number of iterations for backtracking"
+    backtracking_maxiterations::Int64
+    "Decrement factor for backtracking"
+    backtracking_decrementfactor::Float64
+    "Flag for using Armijo condition in bracktracking"
+    backtracking_armijo::Bool
+    "Required descent factor in Armijo condition"
+    backtracking_armijofactor::Float64
     
     "Function pointer on solving routine"
     solveLS::Function
@@ -77,7 +86,7 @@ end
 $(TYPEDSIGNATURES)
 
 Constructor for a StaticData object.
-In particular computes boundary prolongation if required and its derviative,
+In particular computes boundary prolongation if required and its derivative,
 upper and lower bounds on the auxiliary variable as well as the system vector. 
 """
 function StaticData(
@@ -96,11 +105,15 @@ function StaticData(
     kappa::Float64,
     kappa_updates::Array{Int64},
     kappa_powers::Array{Float64},
-    maxIterationsBacktracking::Int64,
-    decrementFactorBacktracking::Float64,
+    damping::Bool,
+    backtracking_override::Union{Bool, Missing},
+    backtracking_maxiterations::Int64,
+    backtracking_decrementfactor::Float64,
+    backtracking_armijo::Bool,
+    backtracking_armijofactor::Float64,
     solver::LinearSolver,
     preconditioner::Preconditioner,
-    useHarmonicProlongation::Bool
+    useharmonicprolongation::Bool
 )
     solveLS, factorize = select_linearsolver(solver)
     computePreconditioner = select_preconditioner(preconditioner)
@@ -108,8 +121,7 @@ function StaticData(
     sigma = compute_sigma(p)
     nu = mesh.nelems * (sigma + 2)
     alpha = sigma
-    beta = 1/9
-    gamma = 5/36
+    beta, gamma = pathfollowing_parameters(damping)
     tolFactor = (nu + (((beta + sqrt(nu)) * beta) / (1 - beta))) 
     tolInv =  tolFactor / eps
 
@@ -128,14 +140,12 @@ function StaticData(
     has_sourceterm = !ismissing(f) && any(o -> o != 0, f)
 
     if ismissing(boundary_prolongation)
-        if useHarmonicProlongation
+        if useharmonicprolongation
             gProl = compute_prolongation_harmonic(
                 g,
                 mesh,
-                has_sourceterm,
                 f,
                 dirichlet_nodes,
-                has_neumannboundary,
                 h,
                 neumann_elements,
                 solveLS,
@@ -146,7 +156,6 @@ function StaticData(
             gProl = compute_prolongation_zero(g, mesh, qdim=qdim)
         end
     else
-        # check feasiblity
         if length(boundary_prolongation) == mesh.nnodes * qdim
             gProl = copy(boundary_prolongation)
         else
@@ -165,13 +174,12 @@ function StaticData(
         p,
         omega,
         dirichlet_nodes,
-        has_neumannboundary,
         neumann_elements,
         h,
-        has_sourceterm,
         f,
         qdim
     )
+
     R = compute_upperbound(
         mesh,
         p,
@@ -210,8 +218,12 @@ function StaticData(
         kappa,
         kappa_updates,
         kappa_powers,
-        maxIterationsBacktracking,
-        decrementFactorBacktracking,
+        damping,
+        backtracking_override,
+        backtracking_maxiterations,
+        backtracking_decrementfactor,
+        backtracking_armijo,
+        backtracking_armijofactor,
         solveLS,
         factorize,
         computePreconditioner
@@ -230,17 +242,34 @@ end
 """
 $(TYPEDSIGNATURES)
     
+Returns parameters β and γ for path-following depending on the Newton step.
+"""
+function pathfollowing_parameters(damping::Bool)
+    if damping
+        # Nesterov - Lectures on Convex Optimization p. 380
+        beta = 0.126
+        gamma = 0.164
+    else
+        # Nesterov - Introductory Lectures on Convex Optimization p. 202
+        beta =  1/9
+        gamma = 5/36
+    end
+
+    return beta, gamma
+end
+
+"""
+$(TYPEDSIGNATURES)
+    
 Computes system vector c for a p-Poisson problem to solve with a barrier method.
 """
 function compute_systemvector(
     mesh::Mesh,
     p::Float64,
     omega::AbstractVector{Float64},
-    dirichlet_nodes::Set{Int64}, 
-    has_neumannboundary::Bool,
+    dirichlet_nodes::Set{Int64},
     neumann_elements::Union{Set{Int64}, Missing},
     h::Union{AbstractVector{Float64}, Missing},
-    has_sourceterm::Bool,
     f::Union{AbstractVector{Float64}, Missing},
     qdim::Int64
 )    
@@ -252,72 +281,11 @@ function compute_systemvector(
             union!(entriesToDrop, qdim*(node-1)+1:qdim*node)
         end
     end
-
-    rhs = zeros(Float64, qdim*(mesh.nnodes-length(dirichlet_nodes)))
     
-    if has_sourceterm
-        if length(f) == mesh.nnodes*qdim
-            M = assemble_massmatrix(
-                mesh,
-                qdim=qdim,
-                order=3
-            )
-            rhs -= (M * f)[1:end .∉ [entriesToDrop]]
-        elseif mod(length(f), mesh.nelems*qdim) == 0
-            nPoints = length(f) / (mesh.nelems * qdim)
-            quadOrder = quadrature_order(mesh.d, nPoints)
-            
-            E = assemble_basismatrix(
-                mesh,
-                qdim=qdim,
-                order=quadOrder
-            )
-            W = Diagonal(
-                assemble_weightmultivector(
-                    mesh,
-                    qdim=qdim,
-                    order=quadOrder
-                )
-            )
-            rhs -= (E' * W * f)[1:end .∉ [entriesToDrop]]
-        else
-            throw(DomainError(f,"Dimension Missmatch"))
-        end
-    end
-    
-    if has_neumannboundary
-        if length(h) == mesh.nnodes*qdim
-            N = assemble_massmatrix_boundary(
-                mesh,
-                boundaryElements=neumann_elements,
-                qdim=qdim,
-                order=3
-            )
-            rhs -= (N * h)[1:end .∉ [entriesToDrop]]
-        elseif mod(length(h),mesh.nboundelems*qdim) == 0
-            nPoints = div(length(h), mesh.nboundelems * qdim)
-            quadOrder = quadrature_order(mesh.d-1, nPoints)
+    src = sources_terms(mesh, neumann_elements, h, f, qdim)
+    rhs = src[1:end .∉ [entriesToDrop]]
 
-            E = assemble_basismatrix_boundary(
-                mesh,
-                boundaryElements=neumann_elements,
-                qdim=qdim,
-                order=quadOrder
-            )
-            W = Diagonal(
-                assemble_weightmultivector_boundary(
-                    mesh,
-                    qdim=qdim,
-                    order=quadOrder
-                )
-            )
-            rhs -= (E' * W * h)[1:end .∉ [entriesToDrop]]
-        else
-            throw(DomainError(h,"Dimension Missmatch"))
-        end
-    end
-
-    return [rhs; omega ./ p]
+    return [-rhs; omega ./ p]
 end
 
 """
@@ -339,7 +307,7 @@ function compute_upperbound(
 )
     L::Float64 = stripwidth(mesh)
     
-    normg::Float64 = xpnorm(p, b, omega)
+    normg::Float64 = 0
     normf::Float64 = 0
     normh::Float64 = 0
     
@@ -352,19 +320,32 @@ function compute_upperbound(
             p,
             h,
             mesh,
-            boundaryElements=neumann_elements,
-            qdim=qdim,
-            order=5
+            boundaryElements = neumann_elements,
+            qdim = qdim,
+            order = 5
         )
     end
 
     if p == 1
-        R = 2 + 2 * normg / (1 - L * normf)
+        denominator = 1 - (L/2) * (normf + normh)
+        if denominator <= 0
+            throw(ArgumentError("Source terms exceeded suitable range for construction of an upper bound of the solution."))
+        end
+
+        normg = xpnorm(p, b, omega)
+
+        t = 2*sqrt(2) + 4 * normg / denominator
+        R = t * maximum(omega) / minimum(omega)
+
     else
+        normg = xpnorm(p, b, omega)
+
         q = conjugated_exponent(p)
-        R = 2 + 8 * normg^(p) + 4 * L^q * (p / 2)^(1 / (1 - p)) * (p - 1) * normf
+        t = 2*sqrt(2) + 4 * normg^(p) + (p-1) * 2^((p+1)/(p-1)) * (L/2)^q * (normf^q + normh^q)
+        R = t / minimum(omega)
+
     end
-    
+
     return R
 end
 
@@ -389,10 +370,8 @@ as solution of the corresponding linear Laplace problem, i.e. ``p = 2``.
 # Mandatory Arguments
 - `g::AbstractVector{Float64}`: Discretely evaluated boundary condition.
 - `mesh::Mesh`: Mesh of the domain.
-- `has_sourceterm::Bool`: Flag for evaluating source term.
 - `f::AbstractVector{Float64}`: Source term.
 - `dirichlet_nodes::Set{Int64}`: Nodes of the boundary to hold Dirichlet condition.
-- `has_neumannboundary::Bool`: Flag for evaluating Neumann boundary.
 - `h::AbstractVector{Float64}`: Neumann boundary condition.
 - `neumann_elements::Set{Int64}`: Edges of the boundary to hold Neumann condition.
 - `solveLS::Function`: Function pointer to solve linear system.
@@ -404,79 +383,16 @@ as solution of the corresponding linear Laplace problem, i.e. ``p = 2``.
 function compute_prolongation_harmonic(
     g::AbstractVector{Float64},
     mesh::Mesh,
-    has_sourceterm::Bool,
     f::Union{AbstractVector{Float64}, Missing}, 
     dirichlet_nodes::Set{Int64},
-    has_neumannboundary::Bool,
     h::Union{AbstractVector{Float64}, Missing},
     neumann_elements::Union{Set{Int64}, Missing}, 
     solveLS::Function,
     preconditioner::Function;
     qdim::Int64 = 1
 ) :: AbstractVector{Float64}
-    rhs = zeros(Float64, qdim*mesh.nnodes)
 
-    if has_sourceterm
-        if length(f) == mesh.nnodes*qdim
-            M = assemble_massmatrix(
-                mesh,
-                qdim=qdim,
-                order=3
-            )
-            rhs += M * f
-        elseif mod(length(f), mesh.nelems*qdim) == 0
-            nPoints = length(f) / (mesh.nelems * qdim)
-            quadOrder = quadrature_order(mesh.d, nPoints)
-
-            E = assemble_basismatrix(
-                mesh,
-                qdim=qdim,
-                order=quadOrder
-            )
-            W = Diagonal(
-                assemble_weightmultivector(
-                    mesh,
-                    qdim=qdim,
-                    order=quadOrder
-                )
-            )
-            rhs += E' * W * f
-        else
-            throw(DomainError(f,"Dimension Missmatch"))
-        end
-    end
-    
-    if has_neumannboundary
-        if length(h) == mesh.nnodes*qdim
-            N = assemble_massmatrix_boundary(
-                mesh,
-                boundaryElements=neumann_elements,
-                qdim=qdim,
-                order=3
-            )
-            rhs += N * h
-        elseif mod(length(h), mesh.nboundelems*qdim) == 0
-            nPoints = div(length(h), mesh.nboundelems * qdim)
-            quadOrder = quadrature_order(mesh.d-1, nPoints)
-
-            E = assemble_basismatrix_boundary(
-                mesh,
-                boundaryElements=neumann_elements,
-                qdim=qdim,
-                order=quadOrder
-            )
-            W = Diagonal(
-                assemble_weightmultivector_boundary(
-                    mesh,
-                    qdim=qdim,
-                    order=quadOrder
-                )
-            )
-            rhs += E' * W * h
-        else
-            throw(DomainError(h,"Dimension Missmatch"))
-        end
-    end
+    rhs = sources_terms(mesh, neumann_elements, h, f, qdim)
     
     L = assemble_laplacian(mesh, qdim=qdim)
     assemble_dirichletcondition!(L, dirichlet_nodes, rhs=rhs, bc=g, qdim=qdim)

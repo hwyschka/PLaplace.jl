@@ -98,12 +98,18 @@ $(TYPEDSIGNATURES)
     
 Writes a given error along other information corresponding to the header to a given file.
 """
-function write_error(file_name::String, data::PLaplaceData, error::Array{Float64,1})
+function write_error(
+    file_name::String,
+    p::Float64,
+    n::Int64, 
+    eps::Float64,
+    error::Array{Float64,1}
+)
     fn = occursin(".", file_name) ? file_name : file_name * ".txt"
     
-    sp = @sprintf("%06.3f", data.p)
-    sn = @sprintf("%.07i", data.mesh.nnodes)
-    ee = @sprintf("%.7e", data.eps)
+    sp = @sprintf("%06.3f", p)
+    sn = @sprintf("%.07i", n)
+    ee = @sprintf("%.7e", eps)
     oe = @sprintf("%+.7e", error[1])
     e1 = @sprintf("%.7e", error[2])
     e2 = @sprintf("%.7e", error[3])
@@ -118,6 +124,10 @@ function write_error(file_name::String, data::PLaplaceData, error::Array{Float64
         write(file, e2, " ")
         write(file, ei, "\n")
     end
+end
+
+function write_error(file_name::String, data::PLaplaceData, error::Array{Float64,1})
+    return write_error(file_name, data.p, data.mesh.nnodes, data.eps, error)
 end
 
 """

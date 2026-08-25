@@ -34,17 +34,14 @@ mutable struct PLaplaceData
     "PDE parameter."
     p::Float64
 
-    "Upper bound for the gradient of the solution."
-    gradient_bound::Union{Float64, Missing}
-
     "Accuracy of the solution in a variational sense."
     eps::Float64
 
     "Stepping scheme of the interior point method."
     stepsize::Stepsize
     
-    "Number of iterations in the auxilliary path-following.
-        Is missing if algorithm did not reach auxilliary stage."
+    "Number of iterations in the auxiliary path-following.
+        Is missing if algorithm did not reach auxiliary stage."
     Naux::Union{Int64,Missing}
 
     "Number of iterations for the main path-following
@@ -55,8 +52,8 @@ mutable struct PLaplaceData
         Is missing if algorithm did not reach setup stage."
     tsetup::Union{Float64,Missing}
 
-    "Time required for the auxilliary path-following
-        Is missing if algorithm did not reach auxilliary stage."
+    "Time required for the auxiliary path-following
+        Is missing if algorithm did not reach auxiliary stage."
     taux::Union{Float64,Missing}
 
     "Time required for the main path-following
@@ -104,7 +101,6 @@ PLaplaceData(
     h,
     qdim,
     p,
-    missing,
     eps,
     stepsize,
     missing,
@@ -142,6 +138,24 @@ function assemble_result!(data::PLaplaceData)
     end
     
     data.v = v
+end
+
+"""
+$(TYPEDSIGNATURES)
+    
+Wrapper for passing statistics to the log handling.
+"""
+function log_statistics(data::PLaplaceData, log::LogData)
+    return log_statistics(
+        log,
+        data.tsetup,
+        data.taux,
+        data.tmain,
+        data.Naux,
+        data.Nmain,
+        data.eps,
+        data.msg
+    )
 end
 
 """
@@ -243,114 +257,4 @@ function print_statistics(data::PLaplaceData)
         data.eps,
         data.msg
     )
-end
-
-"""
-    write_statistics_header(filename::String; guarded::Bool=false)
-    
-Clears and writes a header for a statistics log to the given file.
-In case the file does not exist, it will be created, but only if the path exists.
-If guarded checks before if file already contains a header
-and then does not overwrite potentially previous results.
-"""
-function write_statistics_header(filename::String; guarded::Bool=false)
-    fn = occursin(".", filename) ? filename : filename * ".txt"
-
-    if guarded
-        check_statistics_header(fn) && return
-    end
-
-    open(fn, "w") do file
-        write(file, rpad("p",6), "|")
-        write(file, rpad("eps",13), "|")
-        write(file, rpad("n",7), "|")
-        write(file, rpad("m",7), "|")
-        write(file, rpad("Scheme",8), "|")
-        write(file, rpad("Naux",6), "|")
-        write(file, rpad("Nmain",6), "|")
-        write(file, rpad("N",7), "|")
-        write(file, rpad("t setup",9), "|")
-        write(file, rpad("t aux",9), "|")
-        write(file, rpad("t main",9), "|")
-        write(file, rpad("t sum",9), "|")
-        write(file, rpad("Message",10), "\n")
-        write(file, repeat("-", 115), "\n")
-        write(file, "\$Simulations", "\n")
-    end
-end
-
-"""
-$(TYPEDSIGNATURES)
-    
-Checks if given file exists and alredy contains a statistics header. 
-"""
-function check_statistics_header(filename::String) :: Bool
-    fn = occursin(".", filename) ? filename : filename * ".txt"
-
-    if !isfile(fn)
-        return false
-    end
-
-    f = open(fn)
-    l = readline(f)
-    close(f)
-    a = split(l, "|")
-    
-    !contains(a[1],"p") && return false
-    !contains(a[2],"eps") && return false
-    !contains(a[13],"Message") && return false
-
-    return true
-end
-
-"""
-$(TYPEDSIGNATURES)
-    
-Writes statistics line corresponding to the header to a given log file. 
-"""
-function write_statistics(filename::String, data::PLaplaceData)
-    fn = occursin(".", filename) ? filename : filename * ".txt"
-
-    sp = @sprintf("%06.3f", data.p)
-    se = @sprintf("%.7e", data.eps)
-    sn = @sprintf("%.07i", data.mesh.nnodes)
-    sm = @sprintf("%.07i", data.mesh.nelems)
-
-    st = replace(@sprintf("%-8s", data.stepsize)," "=>"~")
-    na = ismissing(data.Naux) ? repeat("~", 6) : @sprintf("%+.05i", data.Naux)
-    nm = ismissing(data.Nmain) ? repeat("~", 6) : @sprintf("%+.05i", data.Nmain)
-    
-    Nc::Int64 = 0
-    Nc += ismissing(data.Naux) ? 0 : data.Naux
-    if !ismissing(data.Nmain)
-        Nc += abs(data.Nmain)
-        Nc *= sign(data.Nmain)
-    end
-    nc = iszero(Nc) ? repeat("~", 7) : @sprintf("%+.06i", Nc)
-
-    ts = ismissing(data.tsetup) ? "~~~~~.~~~" : @sprintf("%09.3f", data.tsetup)
-    ta = ismissing(data.taux) ? "~~~~~.~~~" : @sprintf("%09.3f", data.taux)
-    tm = ismissing(data.tmain) ? "~~~~~.~~~" : @sprintf("%09.3f", data.tmain)
-
-    tsum::Float64 = 0
-    tsum += ismissing(data.tsetup) ? 0 : data.tsetup
-    tsum += ismissing(data.taux) ? 0 : data.taux
-    tsum += ismissing(data.tmain) ? 0 : data.tmain
-    tc = iszero(tsum) ? "~~~~.~~~" : @sprintf("%09.3f", tsum)
-
-    open(fn, "a") do file
-        write(file, sp, " ")
-        write(file, se, " ")
-        write(file, sn, " ")
-        write(file, sm, " ")
-        write(file, st, " ")
-        write(file, na, " ")
-        write(file, nm, " ")
-        write(file, nc, " ")
-        write(file, ts, " ")
-        write(file, ta, " ")
-        write(file, tm, " ")
-        write(file, tc, " ")
-        write(file, data.msg, "\n")
-    end
 end

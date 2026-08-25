@@ -88,7 +88,7 @@ function read_algorithmlog(filename::String)
 
     conditions = Array{Union{Float64,Missing},1}(undef,entries)
 
-    f = open(fileName)
+    f = open(filename)
 
     while (!eof(f) && (l = readline(f)) != "\$Iterations")
     end

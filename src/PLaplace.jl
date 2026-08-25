@@ -14,13 +14,15 @@ module PLaplace
     using DocStringExtensions
 
     include("utility.jl")
-
     include("linearsystems.jl")
+
     include("staticdata.jl")
 
+    include("barriers/finite.jl")
 
     include("barrierfunction.jl")
-    include("barriers/finite.jl")
+
+    include("problem.jl")
 
     include("logbase.jl")
     include("logdata.jl")
@@ -32,13 +34,14 @@ module PLaplace
     include("pathfollowing.jl")
 
     include("plaplacedata.jl")
+    include("plaplacerunstatistics.jl")
 
-    include("problem.jl")
     include("errordata.jl")
 
     include("algorithm.jl")
 
     export  PLaplaceData,
+            PLaplaceRunStatistics,
             AlgorithmLogData,
             ErrorData
 
@@ -65,6 +68,7 @@ module PLaplace
             write_statistics_header,
             check_statistics_header,
             write_statistics,
+            read_statistics,
             read_algorithmlog
 
     export  assemble_derivativetensor,
@@ -72,7 +76,9 @@ module PLaplace
             assemble_derviativetensor_modified,
             compute_derivative,
             compute_normalderivative,
-            xpnorm
+            xpnorm,
+            xinfnorm,
+            sobolevseminorm
         
     export  compute_prolongation_harmonic,
             compute_prolongation_zero

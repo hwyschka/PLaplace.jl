@@ -431,3 +431,27 @@ function log_write_iteration(
         write(file, scond, "\n")
     end
 end
+
+"""
+$(TYPEDSIGNATURES)
+
+Writes the tracked `hessian` matrix in the given `iteration` to the given `filename`.
+"""
+function log_write_debug_hessian(
+    filename::String,
+    iteration::Int64,
+    hessian::SparseMatrixCSC{Float64, Int64}
+)
+    is,js,vs = findnz(hessian)
+
+    open(filename * "$iteration.txt", "w") do file
+        write(file, "$(hessian.m)x$(hessian.n) SparseMatrixCSC{Float64,Int64}", "\n")
+        write(file, "\$NZ\n")
+
+        for (k,v) in pairs(vs)
+            write(file, @sprintf("%i", is[k]), " ")
+            write(file, @sprintf("%i", js[k]), " ")
+            write(file, @sprintf("%.12f", v), "\n")
+        end
+    end
+end

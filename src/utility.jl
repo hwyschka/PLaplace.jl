@@ -207,6 +207,92 @@ function compute_normalderivative(
     )
 end
 
+"""
+    norm_derivative(
+        dv::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}},
+        p::Float64 = 2.0
+    ) -> Vector{Float64}
+
+Returns vector with length of elements, containing the p-norms of the derivate dv,
+i.e., computes locally the p-norm of the gradient on each element.
+Defaults to the Eucledian norm p=2, but takes arbitrary parameter p as input. 
+"""
+function norm_derivative(
+    dv::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}},
+    p::Float64 = 2.0
+)
+    t = zeros(Float64, length(dv[1,1]))
+
+    if isinf(p)
+        for (key, val) in dv
+            for i in eachindex(val)
+                t[i] = max(t[i],abs(val[i]))
+            end
+        end
+        return t
+    else
+        for (key, val) in dv
+            t += abs.(val).^p
+        end
+
+        return t.^(1/p)
+    end
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Returns ``\\Vert f \\Vert^p_{X^{\\infty}(\\Omega)} =
+\\sup_{\\Omega} \\Vert ∇ f(x) \\Vert_2 \\;\\mathrm{d}x``
+in FEM representaion, i.e.
+
+```math
+\\Vert f \\Vert^p_{X_p(T_{h_\\Omega})} =
+    \\max\\limits_{i} \\omega_i 
+    \\left(\\sum\\limits_{j=1}^d \\sum\\limits_{r=1}^{d^\\prime}
+    [D^{(j,r)} v]_i^2 \\right)^{\\frac{1}{2}}.
+```
+
+Can be passed another parameter to implement a generalized inner (vector) p-norm.
+"""
+function xinfnorm(
+    dv::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}},
+    innernorm::Float64 = 2.0
+) :: Float64
+
+    return maximum(norm_derivative(dv, innernorm))
+end
+
+function xinfnorm(
+    v::AbstractVector{Float64},
+    D::AbstractDict{Tuple{Int64,Int64},SparseMatrixCSC{Float64,Int64}},
+    innernorm::Float64 = 2.0
+)
+    dv = compute_derivative(D, v)
+    return xinfnorm(dv, innernorm)
+end
+
+function xinfnorm(
+    v::AbstractVector{Float64},
+    mesh::Mesh;
+    qdim::Int64 = 1,
+    innernorm::Float64 = 2.0
+)
+    D = assemble_derivativetensor(mesh, qdim=qdim)
+    dv = compute_derivative(D, v)
+    return xinfnorm(dv, innernorm)
+end
+
+
+function xinfnorm(
+    f::Function,
+    mesh::Mesh;
+    qdim::Int64 = 1,
+    innernorm::Float64 = 2.0
+)
+    v = evaluate_mesh_function(mesh, f, qdim=qdim)
+    return xinfnorm(v, mesh, qdim=qdim, innernorm=innernorm)
+end
 
 """
 $(TYPEDSIGNATURES)
@@ -236,33 +322,16 @@ function xpnorm(
     dv::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}},
     w::AbstractVector{Float64}
 ) :: Float64
-    t = zeros(Float64, length(w))
-
-    for (key, val) in dv
-        t += val.^2
-    end
 
     if isinf(p)
-        return maximum(t.^(1/2))
+        return xinfnorm(dv, 2.0)
     else
-        return sum(w .* t.^(p/2))^(1/p)
+        t = norm_derivative(dv, 2.0)
+
+        return sum(w .* t.^p)^(1/p)
     end
 end
 
-"""
-$(TYPEDSIGNATURES)
-
-Does the same as previous `$(FUNCTIONNAME)(...)`,
-but takes coefficient vector and derivate tensor as arguments
-instead of derivative vector.
-
-Requires new mandatory arguments
-- `v::AbstractVector{Float64}`: Function discretely evaluated at the nodes of a mesh.
-- `D::AbstractDict{Tuple{Int64,Int64},SparseMatrixCSC{Float64,Int64}}`: Discrete derivative
-    tensor corresponding to the same nodes as v.
-which replace
-- `dv::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}}`
-"""
 function xpnorm(
     p::Float64,
     v::AbstractVector{Float64},
@@ -273,36 +342,68 @@ function xpnorm(
     return xpnorm(p, dv, w)
 end
 
-"""
-    xpnorm(
-        p::Float64,
-        f::Function,
-        mesh::Mesh;
-        qdim::Int64 = 1
-    ) -> Float64
+function xpnorm(
+    p::Float64,
+    v::AbstractVector{Float64},
+    mesh::Mesh;
+    qdim::Int64 = 1
+)
+    D = assemble_derivativetensor(mesh, qdim=qdim)
+    dv = compute_derivative(D, v)
+    w = assemble_weightmultivector(mesh, qdim=qdim)
+    return xpnorm(p, dv, w)
+end
 
-Does the same as previous `$(FUNCTIONNAME)(...)`,
-but takes a continous function and a mesh as arguments
-instead of a discrete derivative (tensor) and coefficient vector.
-
-Requires new mandatory arguments
-- `f::Function`: Analytic description of the function to be evaluated.
-- `mesh::Mesh`: FEM mesh corresponding to ``T_{h_\\Omega}``.
-which replace
-- `dv::AbstractDict{Tuple{Int64,Int64},AbstractVector{Float64}}`
-"""
 function xpnorm(
     p::Float64,
     f::Function,
     mesh::Mesh;
     qdim::Int64 = 1
 )
-    v = evaluate_mesh_function(mesh, f)
-    D = assemble_derivativetensor(mesh, qdim=qdim)
-    dv = compute_derivative(D, v)
-    w = assemble_weightmultivector(mesh, qdim=qdim)
-    return xpnorm(p, dv, w)
+    v = evaluate_mesh_function(mesh, f, qdim=qdim)
+    return xpnorm(p, v, mesh, qdim=qdim)
 end
+
+"""
+    sobolevseminorm(
+        p::Float64,
+        v::AbstractVector{Float64},
+        mesh::Mesh;
+        qdim::Int64 = 1,
+    ) -> Float64
+
+    sobolevseminorm(
+        p::Float64,
+        f::Function,
+        mesh::Mesh;
+        qdim::Int64 = 1 
+    ) -> Float64   
+
+Returns \$L^p\$-norm of the gradient of a FEM coefficient vector v over the nodes 
+or quadrature points in the elements on the given mesh.
+Note that for p=Inf, the values do not get inter- or extrapolated
+and thus it might not be true maximum over the domain, but only over the given data.
+"""
+function sobolevseminorm(
+    p::Float64,
+    v::AbstractVector{Float64},
+    mesh::Mesh;
+    qdim::Int64 = 1,
+)
+    D = assemble_derivativematrix(mesh, qdim=qdim)
+    return pnorm(p, D*v, mesh; qdim=mesh.d*qdim)
+end
+
+function sobolevseminorm(
+    p::Float64,
+    f::Function,
+    mesh::Mesh;
+    qdim::Int64 = 1 
+)
+    v = evaluate_mesh_function(mesh, f, qdim=qdim)
+    return sobolevseminorm(p, v, mesh, qdim=qdim)
+end
+
 
 """
     compute_lipschitzconstant_boundary(

@@ -1,93 +1,108 @@
 """
 $(TYPEDSIGNATURES)
 
-Computes value of characteristic derivative term in p-Laplace functional evaluated at u.
+Returns discrete source term based on the volume source `f`.
+`f` has `qdim` components and can be given as analytical function or
+discrete coefficient vector on the nodes or quadrature points of `mesh`.
 """
-function compute_plaplace_term(
-    u::AbstractVector{Float64},
-    p::Float64,
+function volume_source(
     mesh::Mesh,
+    f::Union{AbstractVector{Float64}, Function, Missing},
     qdim::Int64
-) :: Float64
-    D = assemble_derivativetensor(mesh, qdim=qdim)
-    Du = zeros(Float64, mesh.nelems)
-    for (key,val) in D
-        Du += (val*u).^2
+) :: Vector{Float64}
+    src = zeros(Float64, qdim*mesh.nnodes)
+
+    if !ismissing(f) && !iszero(f)
+        if f isa Function
+            fd =  evaluate_mesh_function(mesh, f, qdim=qdim)
+        else
+            fd = f            
+        end
+
+        if length(fd) == mesh.nnodes*qdim
+            M = assemble_massmatrix(
+                mesh,
+                qdim = qdim,
+                order = 3
+            )
+            src += M * fd
+        elseif mod(length(fd), mesh.nelems*qdim) == 0
+            nPoints = div(length(fd), mesh.nelems * qdim)
+            quadOrder = quadrature_order(mesh.d, nPoints)
+            
+            E = assemble_basismatrix(
+                mesh,
+                qdim = qdim,
+                order = quadOrder
+            )
+            W = Diagonal(
+                assemble_weightmultivector(
+                    mesh,
+                    qdim = qdim,
+                    order = quadOrder
+                )
+            )
+            src += E' * W * fd
+        else
+            throw(DomainError(fd,"Dimension Missmatch"))
+        end
     end
 
-    if isinf(p)
-        return maximum(Du.^(1/2))
-    else
-        w = assemble_weightmultivector(mesh, qdim=1, order=1)
-        return (1.0 / p) * dot(w, Du.^(p/2)) 
-    end
-    
+    return src
 end
 
 """
 $(TYPEDSIGNATURES)
 
-Computes value of the required boundary and volume source terms for the p-Laplace
-functional evaluated at u.
+Returns discrete source term based on the boundary source `h`.
+`h` has `qdim` components and can be given as analytical function or
+discrete coefficient vector on the nodes or quadrature points of `mesh`.
+Note that if `h` is given as an analytical function, it will be evaluated at the mesh nodes
+where properties like the normal vector might not be defined.
+If you want to account for such potential issues,
+you have to manually evaluate at quadrature points before.
 """
-function compute_sources(
-    u::AbstractVector{Float64},
+function boundary_source(
     mesh::Mesh,
     neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing},
     h::Union{AbstractVector{Float64}, Function, Missing},
-    f::Union{AbstractVector{Float64}, Function, Missing},
     qdim::Int64
-) :: Float64
-    rhs = zeros(Float64, qdim*mesh.nnodes)
-    
-    if !ismissing(f) && any(o -> o != 0, f)
-        if length(f) == mesh.nnodes*qdim
-            M = assemble_massmatrix(
-                mesh,
-                qdim=qdim,
-                order=3
-            )
-            rhs -= M * f
-        elseif mod(length(f), mesh.nelems*qdim) == 0
-            nPoints = length(f) / (mesh.nelems * qdim)
-            quadOrder = quadrature_order(mesh.d, nPoints)
-            
-            E = assemble_basismatrix(
-                mesh,
-                qdim=qdim,
-                order=quadOrder
-            )
-            W = Diagonal(
-                assemble_weightmultivector(
-                    mesh,
-                    qdim=qdim,
-                    order=quadOrder
-                )
-            )
-            rhs -= E' * W * f
-        else
-            throw(DomainError(f,"Dimension Missmatch"))
-        end
-    end
-    
-    if !ismissing(neumann_boundary)
+) :: Vector{Float64}
+    src = zeros(Float64, qdim*mesh.nnodes)
+
+    if !ismissing(neumann_boundary) && !ismissing(h) && !iszero(h)
         if neumann_boundary isa Set{Boundary}
             belems = extract_elements(neumann_boundary)
+            bnodes = extract_nodes(neumann_boundary)
         else
             belems = neumann_boundary
+            bnodes = Set{Int64}()
+            if !ismissing(belems)
+                for el in belems
+                    for node in mesh.BoundaryElements[el]
+                        push!(bnodes, node)
+                    end
+                end
+            end
+        end
+
+        if h isa Function
+            hd = evaluate_mesh_function(mesh, h, region=_neumann_nodes, qdim=qdim)
+        else
+            hd = h            
         end
         
-        if length(h) == mesh.nnodes*qdim
+        if length(hd) == mesh.nnodes*qdim
             N = assemble_massmatrix_boundary(
                 mesh,
                 boundaryElements = belems,
                 qdim = qdim,
                 order = 3
             )
-            rhs -= N * h
-        elseif mod(length(h),mesh.nboundelems*qdim) == 0
-            nPoints = div(length(h), mesh.nboundelems * qdim)
-            quadOrder = quadrature_order(mesh.d-1, nPoints)
+            src += N * hd
+        elseif mod(length(hd), mesh.nboundelems * qdim) == 0
+            nPoints = div(length(hd), mesh.nboundelems * qdim)
+            quadOrder = quadrature_order(mesh.d - 1, nPoints)
 
             E = assemble_basismatrix_boundary(
                 mesh,
@@ -102,13 +117,74 @@ function compute_sources(
                     order = quadOrder
                 )
             )
-            rhs -= E' * W * h
+            src += E' * W * hd
         else
-            throw(DomainError(h,"Dimension Missmatch"))
+            throw(DomainError(hd,"Dimension Missmatch"))
         end
     end
 
-    return dot(u,rhs)
+    return src
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Returns value of source term based on the volume source `f` and the boundary source `h`.
+For more details see [volume_source](@ref) and [boundary_source](@ref).
+"""
+function sources_terms(
+    mesh::Mesh,
+    neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing},
+    h::Union{AbstractVector{Float64}, Function, Missing},
+    f::Union{AbstractVector{Float64}, Function, Missing},
+    qdim::Int64
+) :: Vector{Float64}
+    src = zeros(Float64, qdim*mesh.nnodes)
+    src += volume_source(mesh, f, qdim)
+    src += boundary_source(mesh, neumann_boundary, h, qdim)
+
+    return src
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Returns value of source term based on the volume source `f` and the boundary source `h`
+evaluated at `u`.
+For more details see [sources_terms](@ref).
+"""
+function compute_sources(
+    u::AbstractVector{Float64},
+    mesh::Mesh,
+    neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing},
+    h::Union{AbstractVector{Float64}, Function, Missing},
+    f::Union{AbstractVector{Float64}, Function, Missing},
+    qdim::Int64
+) :: Float64
+    s = sources_terms(mesh, neumann_boundary, h, f, qdim)
+    return dot(s,u)
+end
+
+"""
+$(TYPEDSIGNATURES)
+
+Computes value of characteristic derivative term in p-Laplace functional evaluated at `u`.
+"""
+function compute_plaplace_term(
+    u::AbstractVector{Float64},
+    p::Float64,
+    mesh::Mesh,
+    qdim::Int64
+) :: Float64
+    D = assemble_derivativetensor(mesh, qdim=qdim)
+
+    Du = zeros(Float64, mesh.nelems)
+    for (key,val) in D
+        Du += (val*u).^2
+    end
+
+    w = assemble_weightmultivector(mesh, qdim=1, order=1)
+    return (1.0 / p) * dot(w, Du.^(p/2)) 
 end
 
 """
@@ -123,7 +199,7 @@ end
     ) -> Float64
 
 Returns value of variational formulation functional for the p-Laplace problem
-evaluated at u. 
+evaluated at `u`. 
 """
 function objective_functional(
     u::AbstractVector{Float64},
@@ -149,7 +225,7 @@ function objective_functional(
 
     t = compute_plaplace_term(u, p, mesh, qdim)
 
-    return t + s
+    return t - s
 end
 
 """
@@ -164,8 +240,8 @@ Intended to be called via a wrapper to ensure the discretized analytical solutio
 and the numerical solution match the mesh.
 """
 function compute_errors(
-    anasol::Array{Float64,1},
-    numsol::Array{Float64,1},
+    anasol::Union{AbstractVector{Float64}, Function},
+    numsol::AbstractVector{Float64},
     mesh::Mesh,
     neumann_boundary::Union{Set{Boundary}, Set{Int64}, Missing},
     h::Union{AbstractVector{Float64}, Missing},

@@ -10,7 +10,7 @@ function isadmissible_finite(x::AbstractVector{Float64}, S::StaticData)
         si <= 0 && return false
     end
         
-    tau = S.R .- (S.omega .* s)
+    tau = S.R .- s
     for taui in tau
         taui <= 0 && return false
     end
@@ -25,7 +25,7 @@ end
 
 function compute_value_finite(x::AbstractVector{Float64}, S::StaticData)
     s = x[(S.lengthu + 1):(S.lengthu + S.m)]
-    tau = S.R .- (S.omega .* s)
+    tau = S.R .- s
 
     y = Dict{Tuple{Int64,Int64},AbstractVector{Float64}}()
     for (key, val) in S.D
@@ -43,7 +43,7 @@ end
 
 function compute_gradient_finite(x::AbstractVector{Float64}, S::StaticData)
     s = x[(S.lengthu + 1):(S.lengthu + S.m)]
-    tau = S.R .- (S.omega .* s)
+    tau = S.R .- s
 
     y = Dict{Tuple{Int64,Int64},AbstractVector{Float64}}()
     for (key, val) in S.D
@@ -64,7 +64,7 @@ function compute_gradient_finite(x::AbstractVector{Float64}, S::StaticData)
 
     Fs = zeros(Float64, S.m)
     Fs -= 2 / S.p * z.^(-1) .* s.^(2.0 / S.p - 1) 
-    Fs += S.omega ./ tau 
+    Fs += 1.0 ./ tau 
     Fs -= S.alpha ./ s
 
     return [Fu; Fs]
@@ -72,7 +72,7 @@ end
 
 function compute_hessian_finite(x::AbstractVector{Float64}, S::StaticData)
     s = x[(S.lengthu + 1):(S.lengthu + S.m)]
-    tau = S.R .- (S.omega .* s)
+    tau = S.R .- s
 
     y = Dict{Tuple{Int64,Int64},AbstractVector{Float64}}()
     for (key, val) in S.D
@@ -105,7 +105,7 @@ function compute_hessian_finite(x::AbstractVector{Float64}, S::StaticData)
     F_ss -= 2 / S.p * (2.0 / S.p - 1.0) .* z.^(-1) .* s.^(2.0 / S.p - 2)
     F_ss += 4 / S.p^2 .* z.^(-2) .* s.^(4.0 / S.p - 2)
     F_ss += S.alpha * s.^(-2)
-    F_ss += S.omega.^2 .* tau.^(-2)
+    F_ss += 1.0 .* tau.^(-2)
     
     hessF = [Symmetric(F_uu) Fus; Fus' Diagonal(F_ss)]
 
@@ -118,7 +118,8 @@ function compute_initialguess_finite(S::StaticData)
         t += val.^2
     end
 
-    s = 1 .+ t.^(S.p/2)
+    filter(x) = x > 1.0 ? sqrt(2) * x^(S.p/2) : sqrt(2)
+    s = filter.(t)
 
     return [zeros(Float64, S.lengthu); s]
 end
