@@ -22,6 +22,12 @@ mutable struct LogData
     
     "File name for writing log to file."
     file::Union{String,Missing}
+
+    "Flag for exporting the Hessian matrix during the iteration."
+    exporthessian::Bool
+
+    "File name base for exporting Hessian to file."
+    hessianfile::Union{String,Missing}
 end
 
 """
@@ -41,14 +47,14 @@ Constructor for [LogData](@ref) with data.
 function LogData(
     verbose::Bool,
     filename::Union{String,Missing},
-    logcondition::Bool
+    logcondition::Bool,
+    loghessian::Union{String,Missing}
 ) 
     logobjective = !ismissing(filename)
     
     fn::Union{String,Missing} = missing
     if logobjective
-        fn = endswith(".txt", filename) ? filename : filename * ".txt"
-
+        fn = endswith(filename, ".txt") ? filename : filename * ".txt"
         log_write_header(fn)
     end
 
@@ -59,7 +65,9 @@ function LogData(
         verbose ? print : emptyfunction,
         logobjective,
         trackcondition,
-        fn
+        fn,
+        !ismissing(loghessian),
+        loghessian
     )
 end
 
@@ -201,6 +209,21 @@ Handles change of preconditioner in the log for output stream. Is not relevant f
 function log_change_preconditioner(data::LogData)
     if data.isverbose
         log_print_change_preconditioner(data.out)
+    end
+end
+
+"""
+$(TYPEDSIGNATURES)
+    
+Handles export of hessian for debug purposes.
+"""
+function log_debug_hessian(
+    data::LogData,
+    iteration::Int64,
+    hessian::SparseMatrixCSC{Float64, Int64}
+)
+    if data.exporthessian
+        log_write_debug_hessian(data.hessianfile, iteration, hessian)
     end
 end
 

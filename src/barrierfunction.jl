@@ -5,8 +5,8 @@ Object holdigng the relevant functions for evaluating a barrier function.
 Includes gradient and hessian as well as a specific initial guess.
 
 Is not intended to be initialized directly but via sub-constructors corresponding
-to specific barrier files. See their documentations belov to identify the behaviour
-of specific barrier implemtations. 
+to specific barrier files. See their documentations below to identify the behavior
+of specific barrier implementations. 
 
 # Fields
 $(TYPEDFIELDS)
@@ -24,7 +24,7 @@ struct BarrierFunction
     "Returns matrix-valued Hessian of the barrier function at ``x``."
     hessian::Function
     
-    "Returns inital vector guess for starting an auxilliary path-following."
+    "Returns inital vector guess for starting an auxiliary path-following."
     initialguess::Function
 end
 

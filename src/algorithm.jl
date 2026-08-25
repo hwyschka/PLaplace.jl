@@ -4,6 +4,7 @@ $(TYPEDSIGNATURES)
 Throws error if given parameters are not in the designated range.
 """
 function check_parameters(
+    protected::Bool,
     p::Float64,
     qdim::Int64,
     eps::Float64,
@@ -11,6 +12,10 @@ function check_parameters(
     kappa_updates::Array{Int64},
     kappa_powers::Array{Float64}
 )
+    if !protected
+        return
+    end
+
     msg = ""
 
     if p < 1 || isinf(p)
@@ -100,11 +105,20 @@ but please not that this significantly impacts the performance and requires a lo
     Maximal number of iteriations per stage of the internal path-following schemes.
 - `kappa::Float64 = 10.0`:
     Parameter used for updates of the step length in long-step path-following variants.
+- `damping::Bool = false`: 
+    Flag for using damped Newton steps in path-following.
+- `backtracking_override::Union{Bool, Missing} = missing`: 
+    Manual override for using backtracking search in update of the iterate.
+    Default option missing will use backtracking for long-step path-following variants.
 - `backtracking_maxiterations::Int64 = 25`: 
-    Maximal number of iterations in backtracking search for the update of the iterate
-    in long-step path-following variants.
+    Maximal number of iterations in backtracking search for the update of the iterate.
 - `backtracking_decrementfactor::Float64 = 0.25`:
-    Decrement factor in backtracking search of long-step path-following variants.
+    Decrement factor in backtracking search for the update of the iterate.
+- `backtracking_armijo::Bool = true`:
+    Flag for checking Armijo descent condition in backtracking search.
+    Is ignored if no backtracking is performed.
+- `backtracking_armijofactor::Float64 = 1e-4`:
+    Factor for required descent in Armijo condition.
 - `solver::LinearSolver = CHOLESKY`:
     Specifier for the solver internally used for linear systems.
 - `preconditioner::Preconditioner = NONE`:
@@ -116,11 +130,16 @@ but please not that this significantly impacts the performance and requires a lo
     File name for writing solution to vtk. If not set, no file will be written.
 - `verbose::Bool = true`:
     Flag if log is written to console during the iteration.
+- `protected::Bool = true`:
+    Flag if algorithm checks parameter ranges and problem setting.
 - `logfile::Union{String,Missing} = missing`:
     File name for writing log to a file. If not set, log will not be exported.
 - `logcondition::Bool = false`:
     Flag for tracking condition of the system matrix is tracked and included in log file.
     Will only be exported if `logfile` is set.
+- `loghessian::Union{String,Missing} = missing`:
+    File name for tracking last Hessian.
+    Debug option in case of positive definiteness failure.
 """
 function solve_plaplace(
     p::Float64,
@@ -139,27 +158,30 @@ function solve_plaplace(
     kappa::Float64 = 10.0,
     kappa_updates::Array{Int64} = [2, 8, 15],
     kappa_powers::Array{Float64} = [2.0, 0.5, 0.25],
-    backtracking_maxiterations::Int64 = 25, 
+    damping::Bool = false,
+    backtracking_override::Union{Bool, Missing} = missing,
+    backtracking_maxiterations::Int64 = 32,
     backtracking_decrementfactor::Float64 = 0.25,
+    backtracking_armijo::Bool = true,
+    backtracking_armijofactor::Float64 = 1e-2,
     solver::LinearSolver = CHOLESKY,
     preconditioner::Preconditioner = NONE, 
     useharmonicprolongation::Bool = true,
     vtkfile::Union{String,Missing} = missing,
     verbose::Bool = true,
+    protected::Bool = true,
     logfile::Union{String,Missing} = missing,
-    logcondition::Bool = false
+    logcondition::Bool = false,
+    loghessian::Union{String,Missing} = missing
 )
-    check_parameters(p, qdim, eps, kappa, kappa_updates, kappa_powers)
 
-    logdata = LogData(verbose, logfile, logcondition)
+    check_parameters(protected, p, qdim, eps, kappa, kappa_updates, kappa_powers)
+
+    logdata = LogData(verbose, logfile, logcondition, loghessian)
     log_start(logdata)
     log_defaultdata(logdata, mesh, eps, p, string(stepsize))
 
     log_setup(logdata, 0)
-    _g = g isa Function ? evaluate_mesh_function(mesh, g, dirichlet_boundary, qdim=qdim) : g
-    _f = f isa Function ? evaluate_mesh_function(mesh, f, qdim=qdim) : f
-    _h = h isa Function ? evaluate_mesh_function(mesh, h, neumann_boundary, qdim=qdim) : h
-
     _dirichlet_boundary = dirichlet_boundary isa Set{Boundary} ? 
         extract_nodes(dirichlet_boundary) : dirichlet_boundary
 
@@ -168,6 +190,23 @@ function solve_plaplace(
 
     _neumann_boundary = neumann_boundary isa Set{Boundary} ? 
         extract_elements(neumann_boundary) : neumann_boundary
+
+    _neumann_nodes = Set{Int64}()
+    if !ismissing(_neumann_boundary)
+        for el in _neumann_boundary
+            for node in mesh.BoundaryElements[el]
+                push!(_neumann_nodes, node)
+            end
+        end
+    end
+
+    _g = g isa Function ?
+        evaluate_mesh_function(mesh, g, region=_dirichlet_boundary, qdim=qdim) : g
+    _f = f isa Function ?
+        evaluate_mesh_function(mesh, f, qdim=qdim) : f
+    _h = h isa Function ?
+        evaluate_mesh_function(mesh, h, region=_neumann_nodes, qdim=qdim) : h
+
     log_setup(logdata, 1)
 
     algorithmdata = AlgorithmData()
@@ -188,7 +227,7 @@ function solve_plaplace(
     )
 
     log_setup(logdata, 2)
-    tsetup += @elapsed barrierFunction = BarrierFunction()
+    tsetup += @elapsed barrierfunction = BarrierFunction()
     log_setup(logdata, 3)
 
     log_setup(logdata, 4)
@@ -208,8 +247,12 @@ function solve_plaplace(
         kappa,
         kappa_updates,
         kappa_powers,
+        damping,
+        backtracking_override,
         backtracking_maxiterations,
         backtracking_decrementfactor,
+        backtracking_armijo,
+        backtracking_armijofactor,
         solver,
         preconditioner,
         useharmonicprolongation
@@ -218,7 +261,7 @@ function solve_plaplace(
     log_setup(logdata, 5)
 
     log_setup(logdata, 6)
-    tsetup += @elapsed iterationdata = IterationData(barrierFunction, staticdata)
+    tsetup += @elapsed iterationdata = IterationData(barrierfunction, staticdata)
     log_setup(logdata, 7)
 
     algorithmdata.tsetup = tsetup
@@ -230,7 +273,7 @@ function solve_plaplace(
         staticdata,
         logdata
     )
-    if algorithmdata.Naux > 0
+    if algorithmdata.Naux >= 0
         algorithmdata.tmain = @elapsed MainPathFollowing(
             iterationdata, 
             algorithmdata, 
@@ -240,7 +283,7 @@ function solve_plaplace(
     end
 
     add_algorithmdata!(outputdata, algorithmdata)
-    log_statistics(algorithmdata, logdata)
+    log_statistics(outputdata, logdata)
 
     if !ismissing(vtkfile)
         write_result_to_vtk(vtkfile, outputdata)
